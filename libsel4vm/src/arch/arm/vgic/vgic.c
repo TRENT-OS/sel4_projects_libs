@@ -194,16 +194,25 @@ typedef struct gic_dist_map {
 #define NUM_LIST_REGS 4
 /* This is a rather arbitrary number, increase if needed. */
 #define MAX_IRQ_QUEUE_LEN 64
-#define IRQ_QUEUE_NEXT(_i) (((_i) + 1) & (MAX_IRQ_QUEUE_LEN - 1))
-
-static_assert((MAX_IRQ_QUEUE_LEN & (MAX_IRQ_QUEUE_LEN - 1)) == 0,
-              "IRQ ring buffer size must be power of two");
 
 typedef struct {
     virq_slot_t virqs[MAX_IRQ_QUEUE_LEN]; /* circular buffer */
     size_t head;
     size_t tail;
 } irq_queue_t;
+
+static inline size_t IRQ_QUEUE_NEXT(size_t idx)
+{
+    irq_queue_t *dummy_q; /* need this to use ARRAY_SIZE() */
+    const unsigned int idx_max = ARRAY_SIZE(dummy_q->virqs) - 1;
+    /* The index must be sane when calling this, otherwise something seems
+     * broken. In debug builds the assert will stop execution to highlight the
+     * problem. In release builds it's handled gracefully and the index starts
+     * at 0 again - that's be best we can do here.
+     */
+    assert(idx <= idx_max);
+    return (idx < idx_max) ? (idx + 1) : 0;
+}
 
 /* vCPU specific interrupt context */
 typedef struct vgic_vcpu {
