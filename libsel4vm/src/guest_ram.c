@@ -179,25 +179,23 @@ int vm_ram_touch(vm_t *vm, uintptr_t addr, size_t size, ram_touch_callback_fn to
 int vm_ram_find_largest_free_region(vm_t *vm, uintptr_t *addr, size_t *size)
 {
     vm_mem_t *guest_memory = &vm->mem;
-    int largest = -1;
-    size_t largest_size = 0;
+    struct vm_ram_region *r_largest = NULL;
 
-    /* find the largest unallocated region */
+    /* find largest unallocated region */
     for (int i = 0; i < guest_memory->num_ram_regions; i++) {
-        if (!guest_memory->ram_regions[i].allocated &&
-            guest_memory->ram_regions[i].size > largest_size) {
-            largest = i;
-            largest_size = guest_memory->ram_regions[i].size;
+        struct vm_ram_region *r = &guest_memory->ram_regions[i];
+        if ((!r->allocated) && ((!r_largest) || (r->size > r_largest->size))) {
+            r_largest = r;
         }
     }
 
-    if (largest == -1) {
+    if (!r_largest) {
         ZF_LOGE("Failed to find free region");
         return -1;
     }
 
-    *addr = guest_memory->ram_regions[largest].start;
-    *size = guest_memory->ram_regions[largest].size;
+    *addr = r_largest->start;
+    *size = r_largest->size;
     return 0;
 }
 
