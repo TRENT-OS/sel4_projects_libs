@@ -134,7 +134,7 @@ static inline void virq_ack(vm_vcpu_t *vcpu, virq_t *virq)
 }
 
 /* Memory map for GIC distributor */
-struct gic_dist_map {
+typedef struct gic_dist_map {
     uint32_t enable;                                    /* 0x000 */
     uint32_t ic_type;                                   /* 0x004 */
     uint32_t dist_ident;                                /* 0x008 */
@@ -183,7 +183,7 @@ struct gic_dist_map {
 
     uint32_t periph_id[12];                             /* [0xFC0, 0xFF0) */
     uint32_t component_id[4];                           /* [0xFF0, 0xFFF] */
-};
+} gic_dist_map_t;
 
 /* TODO: A typical number of list registers supported by GIC is four, but not
  * always. One particular way to probe the number of registers is to inject a
