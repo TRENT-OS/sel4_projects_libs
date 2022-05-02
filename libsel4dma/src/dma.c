@@ -28,6 +28,8 @@
 #define DMA_MINALIGN_BYTES 32
 #elif defined(CONFIG_PLAT_EXYNOS5)
 #define DMA_MINALIGN_BYTES 32
+#elif CONFIG_PLAT_QEMU_ARM_VIRT
+#define DMA_MINALIGN_BYTES 32
 #else
 #warning Unknown platform. DMA alignment defaulting to 32 bytes.
 #define DMA_MINALIGN_BYTES 32
