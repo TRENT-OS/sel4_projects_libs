@@ -597,7 +597,7 @@ enum fault_width fault_get_width(fault_t *f)
         if (HSR_IS_SYNDROME_VALID(f->fsr)) {
             switch (HSR_SYNDROME_WIDTH(f->fsr)) {
             case 0:
-                        f->width = WIDTH_BYTE;
+                f->width = WIDTH_BYTE;
                 break;
             case 1:
                 f->width = WIDTH_HALFWORD;
