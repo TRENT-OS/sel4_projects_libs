@@ -52,14 +52,22 @@ typedef struct vmm_pci_entry {
 } vmm_pci_entry_t;
 
 /***
+ * @struct vmm_pci_device
+ * @param {vmm_pci_entry_t *} func      The 8 functions of a PCI device
+ */
+typedef struct vmm_pci_device {
+    vmm_pci_entry_t *func[8];
+} vmm_pci_device_t;
+
+/***
  * @struct vmm_pci_sapce
  * Represents a single host virtual PCI space
- * @param {vmm_pci_entry_t *} bus       The PCI bus, representing 32 devices, each of which has 8 functions
+ * @param {vmm_pci_entry_t *} bus       The PCI bus, representing 32 devices
                                         This only supports one bus at the moment.
  * @param {uint32_t} conf_port_addr     The current config address for IO port emulation
  */
 typedef struct vmm_pci_space {
-    vmm_pci_entry_t *bus0[32][8];
+    vmm_pci_device_t bus[32];
     uint32_t conf_port_addr;
 } vmm_pci_space_t;
 

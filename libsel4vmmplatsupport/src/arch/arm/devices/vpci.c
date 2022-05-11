@@ -270,19 +270,20 @@ int fdt_generate_vpci_node(vm_t *vm, vmm_pci_space_t *pci, void *fdt, int gic_ph
     /* PCI IRQ map */
     bool is_irq_map = false;
     /* The first device is always the bridge (which doesn't need to be recorded in the ranges) */
-    for (int i = 1; i < 32; i++) {
-        vmm_pci_entry_t *dev = pci->bus0[i][0];
-        if (dev) {
+    for (int i = 1; i < ARRAY_SIZE(pci->bus); i++) {
+        vmm_pci_device_t *dev = &pci->bus[i];
+        vmm_pci_entry_t *func = dev->func[0];
+        if (func) {
             struct pci_interrupt_map irq_map;
             uint32_t interrupt_pin = 0;
             uint32_t interrupt_line = 0;
             irq_map.pci_mask.pci_addr.hi  = cpu_to_fdt32(i << PCI_ADDR_DEV_SHIFT);
             irq_map.pci_mask.pci_addr.mid  = 0;
             irq_map.pci_mask.pci_addr.low  = 0;
-            if (dev->ioread(dev->cookie, PCI_INTERRUPT_PIN, 1, &interrupt_pin)) {
+            if (func->ioread(func->cookie, PCI_INTERRUPT_PIN, 1, &interrupt_pin)) {
                 ZF_LOGE("Error reading interrupt pin from PCI device");
             }
-            if (dev->ioread(dev->cookie, PCI_INTERRUPT_LINE, 1, &interrupt_line)) {
+            if (func->ioread(func->cookie, PCI_INTERRUPT_LINE, 1, &interrupt_line)) {
                 ZF_LOGE("Error reading interrupt line from PCI device");
             }
             irq_map.pci_mask.irq_pin = cpu_to_fdt32(interrupt_pin);

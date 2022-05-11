@@ -19,8 +19,6 @@
 #include <sel4vmmplatsupport/drivers/pci.h>
 #include <sel4vmmplatsupport/drivers/pci_helper.h>
 
-#define NUM_DEVICES 32
-#define NUM_FUNCTIONS 8
 
 int vmm_pci_init(vmm_pci_space_t **space)
 {
@@ -30,9 +28,10 @@ int vmm_pci_init(vmm_pci_space_t **space)
         return -1;
     }
 
-    for (int i = 0; i < NUM_DEVICES; i++) {
-        for (int j = 0; j < NUM_FUNCTIONS; j++) {
-            pci_space->bus0[i][j] = NULL;
+    for (int i = 0; i < ARRAY_SIZE(pci_space->bus); i++) {
+        vmm_pci_device_t *dev = &pci_space->bus[i];
+        for (int j = 0; j < ARRAY_SIZE(dev->func); j++) {
+            dev->func[j] = NULL;
         }
     }
     pci_space->conf_port_addr = 0;
@@ -45,19 +44,24 @@ int vmm_pci_init(vmm_pci_space_t **space)
     define_pci_host_bridge(bridge);
     *space = pci_space;
     return vmm_pci_add_entry(pci_space, (vmm_pci_entry_t) {
-        .cookie = bridge, .ioread = vmm_pci_mem_device_read, .iowrite = vmm_pci_entry_ignore_write
+        .cookie = bridge,
+        .ioread = vmm_pci_mem_device_read,
+        .iowrite = vmm_pci_entry_ignore_write
     }, NULL);
 }
 
 int vmm_pci_add_entry(vmm_pci_space_t *space, vmm_pci_entry_t entry, vmm_pci_address_t *addr)
 {
     /* Find empty dev */
-    for (int i = 0; i < 32; i++) {
-        if (!space->bus0[i][0]) {
-            /* Allocate an entry */
-            space->bus0[i][0] = calloc(1, sizeof(entry));
+    for (int i = 0; i < ARRAY_SIZE(space->bus); i++) {
+        vmm_pci_device_t* dev = &space->bus[i];
+        vmm_pci_entry_t **slot = &dev->func[0];
 
-            *space->bus0[i][0] = entry;
+        if (!*slot) {
+            /* Allocate an entry */
+            *slot = calloc(1, sizeof(entry));
+            /* populate entry */
+            **slot = entry;
             /* Report addr if requested */
             if (addr) {
                 *addr = (vmm_pci_address_t) {
@@ -82,8 +86,15 @@ void make_addr_reg_from_config(uint32_t conf, vmm_pci_address_t *addr, uint8_t *
 
 vmm_pci_entry_t *find_device(vmm_pci_space_t *self, vmm_pci_address_t addr)
 {
-    if (addr.bus != 0 || addr.dev >= 32 || addr.fun >= 8) {
+    if (addr.bus != 0 || addr.dev >= ARRAY_SIZE(self->bus)) {
         return NULL;
     }
-    return self->bus0[addr.dev][addr.fun];
+
+    vmm_pci_device_t *dev = &self->bus[addr.dev];
+
+    if (addr.fun >= ARRAY_SIZE(dev->func)) {
+        return NULL;
+    }
+
+    return dev->func[addr.fun];
 }
