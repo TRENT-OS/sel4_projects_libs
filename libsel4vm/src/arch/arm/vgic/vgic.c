@@ -122,14 +122,14 @@
 #define IRQ_BIT(irq) (1U << ((irq) % 32))
 
 typedef struct virq_handle {
-    int virq;
+    int irq;
     irq_ack_fn_t ack;
     void *token;
 } *virq_handle_t;
 
-static inline void virq_ack(vm_vcpu_t *vcpu, struct virq_handle *irq)
+static inline void virq_ack(vm_vcpu_t *vcpu, struct virq_handle *virq)
 {
-    irq->ack(vcpu, irq->virq, irq->token);
+    virq->ack(vcpu, virq->irq, virq->token);
 }
 
 /* Memory map for GIC distributor */
@@ -247,7 +247,7 @@ static virq_handle_t virq_find_irq(struct vgic *vgic, vm_vcpu_t *vcpu, int irq)
 
     /* Check if global interrupt (SPI). */
     for (int i = 0; i < ARRAY_SIZE(vgic->vspis); i++) {
-        if (vgic->vspis[i] && vgic->vspis[i]->virq == irq) {
+        if (vgic->vspis[i] && vgic->vspis[i]->irq == irq) {
             return vgic->vspis[i];
         }
     }
@@ -411,10 +411,10 @@ static inline int vgic_irq_enqueue(vgic_vcpu_t *vgic_vcpu, struct virq_handle *v
         struct virq_handle *lst_virq = q->irqs[i];
         assert(lst_virq);
         if (lst_virq == virq) {
-            ZF_LOGI("don't enqueue interrupt %d twice ", virq->virq);
+            ZF_LOGI("don't enqueue interrupt %d twice ", virq->irq);
             return 0;
         }
-        assert(lst_virq->virq != virq->virq);
+        assert(lst_virq->irq != virq->irq);
     }
 
     q->irqs[q->tail] = virq;
@@ -448,7 +448,7 @@ static seL4_Error vgic_inject_virq(vgic_vcpu_t *vgic_vcpu, vm_vcpu_t *vcpu,
 
     // ZF_LOGI("[VCPU %u] inject IRQ %u -> LR[%u]", vcpu->vcpu_id, virq->virq, idx);
 
-    seL4_Error err = seL4_ARM_VCPU_InjectIRQ(vcpu->vcpu.cptr, virq->virq, 0, 0, idx);
+    seL4_Error err = seL4_ARM_VCPU_InjectIRQ(vcpu->vcpu.cptr, virq->irq, 0, 0, idx);
     if (seL4_NoError != err) {
         /* This should not happen */
         ZF_LOGE("Failure loading vGIC LR[%d] on vCPU %d, error %d",
@@ -486,7 +486,7 @@ static void vgic_dist_enable_irq(struct vgic_dist_device *d, vm_vcpu_t *vcpu, in
     virq_handle_t virq = virq_find_irq(vgic, vcpu, irq);
     if (virq) {
         /* STATE b) */
-        if (!is_pending(gic_dist, virq->virq, vcpu->vcpu_id)) {
+        if (!is_pending(gic_dist, virq->irq, vcpu->vcpu_id)) {
             virq_ack(vcpu, virq);
         }
     } else {
@@ -524,12 +524,12 @@ static int vgic_dist_set_pending_irq(struct vgic_dist_device *d, vm_vcpu_t *vcpu
         return -1;
     }
 
-    if (is_pending(gic_dist, virq->virq, vcpu->vcpu_id)) {
+    if (is_pending(gic_dist, virq->irq, vcpu->vcpu_id)) {
         return 0;
     }
 
     DDIST("Pending set: Inject IRQ from pending set (%d)\n", irq);
-    set_pending(gic_dist, virq->virq, true, vcpu->vcpu_id);
+    set_pending(gic_dist, virq->irq, true, vcpu->vcpu_id);
 
     /* If the queue is empty and there is a free LR slot, then the IRQ can be
      * injected directly. Otherwise, it has to be added to the queue and then
@@ -570,7 +570,7 @@ static int vgic_dist_set_pending_irq(struct vgic_dist_device *d, vm_vcpu_t *vcpu
     if (!is_empty_queue) {
         for (int i = 0; i < ARRAY_SIZE(vgic_vcpu->lr_shadow); i++) {
             if (vgic_vcpu->lr_shadow[i] == NULL) {
-                struct virq_handle *virq = vgic_irq_dequeue(vgic_vcpu);
+                virq = vgic_irq_dequeue(vgic_vcpu);
                 if (!virq) {
                     break;
                 }
@@ -583,7 +583,6 @@ static int vgic_dist_set_pending_irq(struct vgic_dist_device *d, vm_vcpu_t *vcpu
                             virq->irq, vcpu->vcpu_id, err);
                     return err;
                 }
-
             }
         }
     }
@@ -1027,7 +1026,7 @@ int vm_register_irq(vm_vcpu_t *vcpu, int irq, irq_ack_fn_t ack_fn, void *cookie)
                 break;
             }
             /* interrupts can't be registered twice */
-            if ((*slot)->virq == irq) {
+            if ((*slot)->irq == irq) {
                 ZF_LOGE("IRQ %d already registered\n", irq);
                 return -1;
             }
@@ -1047,7 +1046,7 @@ int vm_register_irq(vm_vcpu_t *vcpu, int irq, irq_ack_fn_t ack_fn, void *cookie)
     }
 
     *virq = (typeof(*virq)){
-        .virq  = irq,
+        .irq = irq,
         .token = cookie,
         .ack  = ack_fn
     };
@@ -1182,9 +1181,9 @@ int vm_vgic_maintenance_handler(vm_vcpu_t *vcpu)
     } else {
         vgic_vcpu->lr_shadow[idx] = NULL;
         DIRQ("Maintenance on vCPU %d LR[%d] holding IRQ %d\n",
-             vcpu->vcpu_id, idx, lr_virq->virq);
+             vcpu->vcpu_id, idx, lr_virq->irq);
         /* Clear pending */
-        set_pending(gic_dist, lr_virq->virq, false, vcpu->vcpu_id);
+        set_pending(gic_dist, lr_virq->irq, false, vcpu->vcpu_id);
         virq_ack(vcpu, lr_virq);
         /* Check the overflow list for pending IRQs */
         virq_handle_t virq = vgic_irq_dequeue(vgic_vcpu);
