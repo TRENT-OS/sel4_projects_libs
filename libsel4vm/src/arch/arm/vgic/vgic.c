@@ -463,39 +463,6 @@ static int vgic_vcpu_load_list_reg(vgic_t *vgic, vm_vcpu_t *vcpu, int idx, struc
     return 0;
 }
 
-int handle_vgic_maintenance(vm_vcpu_t *vcpu, int idx)
-{
-    /* STATE d) */
-    assert(vgic_dist);
-    struct gic_dist_map *gic_dist = vgic_priv_get_dist(vgic_dist);
-    vgic_t *vgic = vgic_device_get_vgic(vgic_dist);
-    assert(vgic);
-    vgic_vcpu_t *vgic_vcpu = get_vgic_vcpu(vgic, vcpu->vcpu_id);
-    assert(vgic_vcpu);
-    assert((idx >= 0) && (idx < ARRAY_SIZE(vgic_vcpu->lr_shadow)));
-    virq_handle_t *slot = &vgic_vcpu->lr_shadow[idx];
-    assert(*slot);
-    virq_handle_t lr_virq = *slot;
-    *slot = NULL;
-    /* Clear pending */
-    DIRQ("Maintenance IRQ %d\n", lr_virq->virq);
-    set_pending(gic_dist, lr_virq->virq, false, vcpu->vcpu_id);
-    virq_ack(vcpu, lr_virq);
-
-    /* Check the overflow list for pending IRQs */
-    struct virq_handle *virq = vgic_irq_dequeue(vgic, vcpu);
-    if (virq) {
-        int err = vgic_vcpu_load_list_reg(vgic, vcpu, idx, virq);
-        if (err) {
-            ZF_LOGF("Failure loading vGIC LR[%d] on vCPU %d, error %d",
-                    idx, vcpu->vcpu_id, err);
-            return err;
-        }
-    }
-
-    return 0;
-}
-
 static int vgic_dist_enable(struct vgic_dist_device *d, vm_t *vm)
 {
     struct gic_dist_map *gic_dist = vgic_priv_get_dist(d);
@@ -1169,14 +1136,43 @@ int vm_vgic_maintenance_handler(vm_vcpu_t *vcpu)
     /* Currently not handling spurious IRQs */
     assert(idx >= 0);
 
-    int err = handle_vgic_maintenance(vcpu, idx);
-    if (!err) {
-        seL4_MessageInfo_t reply;
-        reply = seL4_MessageInfo_new(0, 0, 0, 0);
-        seL4_Reply(reply);
+    /* STATE d) */
+    assert(vgic_dist);
+    struct gic_dist_map *gic_dist = vgic_priv_get_dist(vgic_dist);
+    vgic_t *vgic = vgic_device_get_vgic(vgic_dist);
+    assert(vgic);
+    vgic_vcpu_t *vgic_vcpu = get_vgic_vcpu(vgic, vcpu->vcpu_id);
+    assert(vgic_vcpu);
+    assert(idx < ARRAY_SIZE(vgic_vcpu->lr_shadow));
+    virq_handle_t lr_virq = vgic_vcpu->lr_shadow[idx];
+    if (!lr_virq) {
+        /* This is not supposed to happen, seems things got out of sync
+         * somewhere. Since the caller tells us this slot is "officially" free
+         * now, we don't report an error. If things are badly out of sync,
+         * adding an IRQ to an LR register that is not free might fail
+         * eventually and that will be reported as error.
+         */
+        ZF_LOGW("Maintenance attempt on empty LR[%d] on vCPU %d", idx);
     } else {
-        ZF_LOGF("vGIC maintenance handler failed (error %d)", err);
+        vgic_vcpu->lr_shadow[idx] = NULL;
+        DIRQ("Maintenance on vCPU %d LR[%d] holding IRQ %d\n",
+             vcpu->vcpu_id, idx, lr_virq->virq);
+        /* Clear pending */
+        set_pending(gic_dist, lr_virq->virq, false, vcpu->vcpu_id);
+        virq_ack(vcpu, lr_virq);
+        /* Check the overflow list for pending IRQs */
+        virq_handle_t virq = vgic_irq_dequeue(vgic, vcpu);
+        if (virq) {
+            int err = vgic_vcpu_load_list_reg(vgic, vcpu, idx, virq);
+            if (err) {
+                ZF_LOGE("Failure loading vCPU %d LR[%d], error %d",
+                        vcpu->vcpu_id, idx, err);
+                return VM_EXIT_HANDLE_ERROR;
+            }
+        }
     }
+
+    seL4_Reply(seL4_MessageInfo_new(0, 0, 0, 0));
     return VM_EXIT_HANDLED;
 }
 
