@@ -388,6 +388,13 @@ static inline bool is_active(struct gic_dist_map *gic_dist, int irq, int vcpu_id
     return is_spi_active(gic_dist, irq);
 }
 
+static inline int vgic_is_irq_queue_empty(vgic_vcpu_t *vgic_vcpu)
+{
+    assert(vgic_vcpu);
+    struct irq_queue *q = &vgic_vcpu->irq_queue;
+    return (q->head == q->tail);
+}
+
 static inline int vgic_irq_enqueue(vgic_vcpu_t *vgic_vcpu, struct virq_handle *virq)
 {
     assert(vgic_vcpu);
@@ -430,35 +437,27 @@ static inline struct virq_handle *vgic_irq_dequeue(vgic_vcpu_t *vgic_vcpu)
     return virq;
 }
 
-static int vgic_find_empty_list_reg(vgic_t *vgic, vm_vcpu_t *vcpu)
+static seL4_Error vgic_inject_virq(vgic_vcpu_t *vgic_vcpu, vm_vcpu_t *vcpu,
+                                   int idx, virq_handle_t virq)
 {
-    vgic_vcpu_t *vgic_vcpu = get_vgic_vcpu(vgic, vcpu->vcpu_id);
     assert(vgic_vcpu);
-    for (int i = 0; i < ARRAY_SIZE(vgic_vcpu->lr_shadow); i++) {
-        if (vgic_vcpu->lr_shadow[i] == NULL) {
-            return i;
-        }
-    }
-
-    return -1;
-}
-
-static int vgic_vcpu_load_list_reg(vgic_t *vgic, vm_vcpu_t *vcpu, int idx, struct virq_handle *irq)
-{
-    vgic_vcpu_t *vgic_vcpu = get_vgic_vcpu(vgic, vcpu->vcpu_id);
-    assert(vgic_vcpu);
+    assert(vcpu);
+    assert(virq);
     assert((idx >= 0) && (idx < ARRAY_SIZE(vgic_vcpu->lr_shadow)));
+    assert(NULL == vgic_vcpu->lr_shadow[idx]);
 
-    seL4_Error err = seL4_ARM_VCPU_InjectIRQ(vcpu->vcpu.cptr, irq->virq, 0, 0, idx);
+    // ZF_LOGI("[VCPU %u] inject IRQ %u -> LR[%u]", vcpu->vcpu_id, virq->virq, idx);
+
+    seL4_Error err = seL4_ARM_VCPU_InjectIRQ(vcpu->vcpu.cptr, virq->virq, 0, 0, idx);
     if (seL4_NoError != err) {
-        ZF_LOGF("Failure loading vGIC list register %d on vCPU %d, error %d",
+        /* This should not happen */
+        ZF_LOGE("Failure loading vGIC LR[%d] on vCPU %d, error %d",
                 idx, vcpu->vcpu_id, err);
         /* Return a generic error, the caller doesn't understand seL4 errors. */
         return -1;
     }
 
-    vgic_vcpu->lr_shadow[idx] = irq;
-
+    vgic_vcpu->lr_shadow[idx] = virq;
     return 0;
 }
 
@@ -532,36 +531,59 @@ static int vgic_dist_set_pending_irq(struct vgic_dist_device *d, vm_vcpu_t *vcpu
     DDIST("Pending set: Inject IRQ from pending set (%d)\n", irq);
     set_pending(gic_dist, virq->virq, true, vcpu->vcpu_id);
 
-    /* Enqueueing an IRQ and dequeueing it right after makes little sense
-     * now, but in the future this is needed to support IRQ priorities.
+    /* If the queue is empty and there is a free LR slot, then the IRQ can be
+     * injected directly. Otherwise, it has to be added to the queue and then
+     * the queue can be processed. This may look overengineered now, but In the
+     * future the queue might be ordered by IRQ priorities.
      */
     vgic_vcpu_t *vgic_vcpu = get_vgic_vcpu(vgic, vcpu->vcpu_id);
     assert(vgic_vcpu);
-    int err = vgic_irq_enqueue(vgic_vcpu, virq_data);
+    bool is_empty_queue = vgic_is_irq_queue_empty(vgic_vcpu);
+    if (is_empty_queue) {
+        for (int i = 0; i < ARRAY_SIZE(vgic_vcpu->lr_shadow); i++) {
+            if (vgic_vcpu->lr_shadow[i] == NULL) {
+                /* This is not supposed to fail, seems something is wrong with
+                 * our state and the actual hardware state. Ignore the error,
+                 * keep trying another free slot and eventually enqueue the IRQ.
+                 */
+                int err = vgic_inject_virq(vgic_vcpu, vcpu, i, virq);
+                if (!err) {
+                    return 0; /* injection successful */
+                }
+            }
+        }
+    }
+
+    /* Add IRQ to the queue. Currently there is no support for interrupt
+     * priorities or duplicates, so we just append it at the end.
+     */
+    int err = vgic_irq_enqueue(vgic_vcpu, virq);
     if (err) {
         ZF_LOGE("Failure enqueueing IRQ, increase MAX_IRQ_QUEUE_LEN");
         return -1;
     }
 
-    int idx = vgic_find_empty_list_reg(vgic, vcpu);
-    if (idx < 0) {
-        /* There were no empty list registers available, but that's not a big
-         * deal -- we have already enqueued this IRQ and eventually the vGIC
-         * maintenance code will load it to a list register from the queue.
-         */
-        return 0;
+    /* If the queue was empty before, then IRQ injection failed and there is no
+     * point in trying it again here. Just keep it in the queue and retry at the
+     * next maintenance cycle. It
+     */
+    if (!is_empty_queue) {
+        for (int i = 0; i < ARRAY_SIZE(vgic_vcpu->lr_shadow); i++) {
+            if (vgic_vcpu->lr_shadow[i] == NULL) {
+                struct virq_handle *virq = vgic_irq_dequeue(vgic_vcpu);
+                int err = vgic_inject_virq(vgic_vcpu, vcpu, i, virq);
+                if (err) {
+                    /* This error is fatal, as this call is not supposed to fail and there
+                     * is nothing the caller can really do besides graceful termination.
+                     */
+                    ZF_LOGE("Failure injecting IRQ %d on vCPU %d, error %d",
+                            virq->irq, vcpu->vcpu_id, err);
+                    return err;
+                }
+                break;
+            }
+        }
     }
-
-    virq = vgic_irq_dequeue(vgic_vcpu);
-    assert(virq);
-
-    err = vgic_vcpu_load_list_reg(vgic, vcpu, idx, virq);
-    if (err) {
-        ZF_LOGE("Failure loading vGIC LR[%d] on vCPU %d, error %d",
-                idx, vcpu->vcpu_id, err);
-        return err;
-    }
-
     return 0;
 }
 
@@ -1164,10 +1186,10 @@ int vm_vgic_maintenance_handler(vm_vcpu_t *vcpu)
         /* Check the overflow list for pending IRQs */
         virq_handle_t virq = vgic_irq_dequeue(vgic_vcpu);
         if (virq) {
-            int err = vgic_vcpu_load_list_reg(vgic, vcpu, idx, virq);
+            int err = vgic_inject_virq(vgic_vcpu, vcpu, idx, virq);
             if (err) {
-                ZF_LOGE("Failure loading vCPU %d LR[%d], error %d",
-                        vcpu->vcpu_id, idx, err);
+                ZF_LOGE("Failure injecting IRQ %d from LR[%d] on vCPU %d, error %d",
+                        virq->irq, idx, vcpu->vcpu_id, err);
                 return VM_EXIT_HANDLE_ERROR;
             }
         }
