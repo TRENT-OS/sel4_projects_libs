@@ -571,6 +571,9 @@ static int vgic_dist_set_pending_irq(struct vgic_dist_device *d, vm_vcpu_t *vcpu
         for (int i = 0; i < ARRAY_SIZE(vgic_vcpu->lr_shadow); i++) {
             if (vgic_vcpu->lr_shadow[i] == NULL) {
                 struct virq_handle *virq = vgic_irq_dequeue(vgic_vcpu);
+                if (!virq) {
+                    break;
+                }
                 int err = vgic_inject_virq(vgic_vcpu, vcpu, i, virq);
                 if (err) {
                     /* This error is fatal, as this call is not supposed to fail and there
@@ -580,7 +583,7 @@ static int vgic_dist_set_pending_irq(struct vgic_dist_device *d, vm_vcpu_t *vcpu
                             virq->irq, vcpu->vcpu_id, err);
                     return err;
                 }
-                break;
+
             }
         }
     }
