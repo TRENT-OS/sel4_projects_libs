@@ -129,6 +129,7 @@ typedef struct {
 
 static inline void virq_ack(vm_vcpu_t *vcpu, virq_t *virq)
 {
+    assert(virq);
     virq->ack(vcpu, virq->irq, virq->token);
 }
 
@@ -268,7 +269,6 @@ static inline struct vgic *vgic_device_get_vgic(struct vgic_dist_device *d)
 static inline struct gic_dist_map *vgic_priv_get_dist(struct vgic_dist_device *d)
 {
     assert(d);
-    assert(d->priv);
     return vgic_device_get_vgic(d)->dist;
 }
 
