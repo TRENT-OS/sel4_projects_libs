@@ -120,32 +120,29 @@ static int vcpu_stop(vm_vcpu_t *vcpu)
 
 int vcpu_start(vm_vcpu_t *vcpu)
 {
-    int err;
     vcpu->vcpu_online = true;
-    seL4_Word vmpidr_val;
-    seL4_Word vmpidr_reg;
 
 #if CONFIG_MAX_NUM_NODES > 1
-#ifdef CONFIG_ARCH_AARCH64
-    vmpidr_reg = seL4_VCPUReg_VMPIDR_EL2;
+    int err = vm_set_arm_vcpu_reg(
+                vcpu,
+#if defined(CONFIG_ARCH_AARCH64)
+                seL4_VCPUReg_VMPIDR_EL2,
+#elif defined (CONFIG_ARCH_AARCH32)
+                seL4_VCPUReg_VMPIDR,
 #else
-    vmpidr_reg = seL4_VCPUReg_VMPIDR;
+#error "invalid architecture"
 #endif
-    if (vcpu->vcpu_id == BOOT_VCPU) {
-        /*  VMPIDR Bit Assignments [G8.2.167, Arm Architecture Reference Manual Armv8]
-         * - BIT(24): Performance of PEs (processing element) at the lowest affinity level is very interdependent
-         * - BIT(31): This implementation includes the ARMv7 Multiprocessing Extensions functionality
-         */
-        vmpidr_val = BIT(24) | BIT(31);
-    } else {
-        vmpidr_val = vcpu->target_cpu;
-    }
-    err = vm_set_arm_vcpu_reg(vcpu, vmpidr_reg, vmpidr_val);
+                /*  VMPIDR Bit Assignments [G8.2.167, Arm Architecture Reference Manual Armv8]
+                 * - BIT(24): Performance of PEs (processing element) at the lowest affinity level is very interdependent
+                 * - BIT(31): This implementation includes the ARMv7 Multiprocessing Extensions functionality
+                 */
+                (vcpu->vcpu_id == BOOT_VCPU) ? BIT(24) | BIT(31) : vcpu->target_cpu);
     if (err) {
         ZF_LOGE("Failed to set VMPIDR register");
         return -1;
     }
-#endif
+#endif /* CONFIG_MAX_NUM_NODES > 1 */
+
     return seL4_TCB_Resume(vm_get_vcpu_tcb(vcpu));
 }
 
