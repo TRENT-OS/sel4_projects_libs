@@ -121,13 +121,13 @@
 #define IRQ_IDX(irq) ((irq) / 32)
 #define IRQ_BIT(irq) (1U << ((irq) % 32))
 
-typedef struct virq_handle {
+typedef struct {
     int irq;
     irq_ack_fn_t ack;
     void *token;
-} *virq_handle_t;
+} virq_t, *virq_slot_t;
 
-static inline void virq_ack(vm_vcpu_t *vcpu, struct virq_handle *virq)
+static inline void virq_ack(vm_vcpu_t *vcpu, virq_t *virq)
 {
     virq->ack(vcpu, virq->irq, virq->token);
 }
@@ -198,20 +198,20 @@ struct gic_dist_map {
 static_assert((MAX_IRQ_QUEUE_LEN & (MAX_IRQ_QUEUE_LEN - 1)) == 0,
               "IRQ ring buffer size must be power of two");
 
-struct irq_queue {
-    struct virq_handle *irqs[MAX_IRQ_QUEUE_LEN]; /* circular buffer */
+typedef struct {
+    virq_slot_t virqs[MAX_IRQ_QUEUE_LEN]; /* circular buffer */
     size_t head;
     size_t tail;
-};
+} irq_queue_t;
 
 /* vCPU specific interrupt context */
 typedef struct vgic_vcpu {
     /* Mirrors the GIC's vCPU list registers */
     virq_handle_t lr_shadow[NUM_LIST_REGS];
     /* Queue for IRQs that don't fit in the GIC's vCPU list registers */
-    struct irq_queue irq_queue;
+    irq_queue_t irq_queue;
     /*  vCPU local interrupts (SGI, PPI) */
-    virq_handle_t local_virqs[NUM_VCPU_LOCAL_VIRQS];
+    virq_slot_t local_virqs[NUM_VCPU_LOCAL_VIRQS];
 } vgic_vcpu_t;
 
 /* GIC global interrupt context */
@@ -233,7 +233,7 @@ static vgic_vcpu_t *get_vgic_vcpu(vgic_t *vgic, int vcpu_id)
     return &(vgic->vgic_vcpu[vcpu_id]);
 }
 
-static virq_handle_t virq_find_irq(struct vgic *vgic, vm_vcpu_t *vcpu, int irq)
+static virq_t *virq_find_irq(struct vgic *vgic, vm_vcpu_t *vcpu, int irq)
 {
     assert(irq >= 0);
 
@@ -247,8 +247,9 @@ static virq_handle_t virq_find_irq(struct vgic *vgic, vm_vcpu_t *vcpu, int irq)
 
     /* Check if global interrupt (SPI). */
     for (int i = 0; i < ARRAY_SIZE(vgic->vspis); i++) {
-        if (vgic->vspis[i] && vgic->vspis[i]->irq == irq) {
-            return vgic->vspis[i];
+        virq_t *virq = vgic->vspis[i];
+        if (virq && virq->irq == irq) {
+            return virq;
         }
     }
 
@@ -391,15 +392,15 @@ static inline bool is_active(struct gic_dist_map *gic_dist, int irq, int vcpu_id
 static inline int vgic_is_irq_queue_empty(vgic_vcpu_t *vgic_vcpu)
 {
     assert(vgic_vcpu);
-    struct irq_queue *q = &vgic_vcpu->irq_queue;
+    irq_queue_t *q = &vgic_vcpu->irq_queue;
     return (q->head == q->tail);
 }
 
-static inline int vgic_irq_enqueue(vgic_vcpu_t *vgic_vcpu, struct virq_handle *virq)
+static inline int vgic_irq_enqueue(vgic_vcpu_t *vgic_vcpu, virq_t *virq)
 {
     assert(vgic_vcpu);
     assert(virq);
-    struct irq_queue *q = &vgic_vcpu->irq_queue;
+    irq_queue_t *q = &vgic_vcpu->irq_queue;
 
     if (unlikely(IRQ_QUEUE_NEXT(q->tail) == q->head)) {
         ZF_LOGF("Failure enqueueing IRQ, increase MAX_IRQ_QUEUE_LEN");
@@ -408,7 +409,7 @@ static inline int vgic_irq_enqueue(vgic_vcpu_t *vgic_vcpu, struct virq_handle *v
 
     /* Don't enqueue if the interrupt is already in the queue. */
     for (size_t i = q->head; i != q->tail; i = IRQ_QUEUE_NEXT(i)) {
-        struct virq_handle *lst_virq = q->irqs[i];
+        virq_t *lst_virq = q->virqs[i];
         assert(lst_virq);
         if (lst_virq == virq) {
             ZF_LOGI("don't enqueue interrupt %d twice ", virq->irq);
@@ -417,20 +418,20 @@ static inline int vgic_irq_enqueue(vgic_vcpu_t *vgic_vcpu, struct virq_handle *v
         assert(lst_virq->irq != virq->irq);
     }
 
-    q->irqs[q->tail] = virq;
+    q->virqs[q->tail] = virq;
     q->tail = IRQ_QUEUE_NEXT(q->tail);
 
     return 0;
 }
 
-static inline struct virq_handle *vgic_irq_dequeue(vgic_vcpu_t *vgic_vcpu)
+static inline virq_t *vgic_irq_dequeue(vgic_vcpu_t *vgic_vcpu)
 {
     assert(vgic_vcpu);
-    struct irq_queue *q = &vgic_vcpu->irq_queue;
-    struct virq_handle *virq = NULL;
+    irq_queue_t *q = &vgic_vcpu->irq_queue;
+    virq_t *virq = NULL;
 
     if (q->head != q->tail) {
-        virq = q->irqs[q->head];
+        virq = q->virqs[q->head];
         q->head = IRQ_QUEUE_NEXT(q->head);
     }
 
@@ -438,7 +439,7 @@ static inline struct virq_handle *vgic_irq_dequeue(vgic_vcpu_t *vgic_vcpu)
 }
 
 static seL4_Error vgic_inject_virq(vgic_vcpu_t *vgic_vcpu, vm_vcpu_t *vcpu,
-                                   int idx, virq_handle_t virq)
+                                   int idx, virq_t *virq)
 {
     assert(vgic_vcpu);
     assert(vcpu);
@@ -483,7 +484,7 @@ static void vgic_dist_enable_irq(struct vgic_dist_device *d, vm_vcpu_t *vcpu, in
     vgic_t *vgic = vgic_device_get_vgic(d);
     DDIST("enabling irq %d\n", irq);
     set_enable(gic_dist, irq, true, vcpu->vcpu_id);
-    virq_handle_t virq = virq_find_irq(vgic, vcpu, irq);
+    virq_t *virq = virq_find_irq(vgic, vcpu, irq);
     if (virq) {
         /* STATE b) */
         if (!is_pending(gic_dist, virq->irq, vcpu->vcpu_id)) {
@@ -517,7 +518,7 @@ static int vgic_dist_set_pending_irq(struct vgic_dist_device *d, vm_vcpu_t *vcpu
     struct gic_dist_map *gic_dist = vgic_priv_get_dist(d);
     vgic_t *vgic = vgic_device_get_vgic(d);
 
-    virq_handle_t virq = virq_find_irq(vgic, vcpu, irq);
+    virq_t *virq = virq_find_irq(vgic, vcpu, irq);
 
     if (!virq || !gic_dist->enable || !is_enabled(gic_dist, irq, vcpu->vcpu_id)) {
         DDIST("IRQ not enabled (%d) on vcpu %d\n", irq, vcpu->vcpu_id);
@@ -1008,7 +1009,7 @@ int vm_register_irq(vm_vcpu_t *vcpu, int irq, irq_ack_fn_t ack_fn, void *cookie)
     vgic_vcpu_t *vgic_vcpu = get_vgic_vcpu(vgic, vcpu->vcpu_id);
     assert(vgic_vcpu);
 
-    virq_handle_t *slot = NULL;
+    virq_slot_t *slot = NULL;
 
     /* Check if vCPU local interrupt (SGI, PPI). */
     if (irq < ARRAY_SIZE(vgic_vcpu->local_virqs)) {
@@ -1039,7 +1040,7 @@ int vm_register_irq(vm_vcpu_t *vcpu, int irq, irq_ack_fn_t ack_fn, void *cookie)
     }
 
     assert(NULL != slot); /* There must be a valid slot here. */
-    virq_handle_t virq = calloc(1, sizeof(*virq));
+    virq_t *virq = calloc(1, sizeof(*virq));
     if (!virq) {
         ZF_LOGE("virq allocation failed for IRQ %d", irq);
         return -1;
@@ -1169,7 +1170,7 @@ int vm_vgic_maintenance_handler(vm_vcpu_t *vcpu)
     vgic_vcpu_t *vgic_vcpu = get_vgic_vcpu(vgic, vcpu->vcpu_id);
     assert(vgic_vcpu);
     assert(idx < ARRAY_SIZE(vgic_vcpu->lr_shadow));
-    virq_handle_t lr_virq = vgic_vcpu->lr_shadow[idx];
+    virq_t *lr_virq = vgic_vcpu->lr_shadow[idx];
     if (!lr_virq) {
         /* This is not supposed to happen, seems things got out of sync
          * somewhere. Since the caller tells us this slot is "officially" free
@@ -1186,7 +1187,7 @@ int vm_vgic_maintenance_handler(vm_vcpu_t *vcpu)
         set_pending(gic_dist, lr_virq->irq, false, vcpu->vcpu_id);
         virq_ack(vcpu, lr_virq);
         /* Check the overflow list for pending IRQs */
-        virq_handle_t virq = vgic_irq_dequeue(vgic_vcpu);
+        virq_t *virq = vgic_irq_dequeue(vgic_vcpu);
         if (virq) {
             int err = vgic_inject_virq(vgic_vcpu, vcpu, idx, virq);
             if (err) {
