@@ -194,42 +194,6 @@ static int load_image(vm_t *vm, const char *image_name, uintptr_t load_addr,  si
     return 0;
 }
 
-static void *load_guest_kernel_image(vm_t *vm, const char *kernel_image_name, uintptr_t load_base_addr,
-                                     size_t *image_size)
-{
-    int err;
-    uintptr_t load_addr;
-    enum img_type ret_file_type;
-    Elf64_Ehdr header = {0};
-    err = get_guest_image_type(kernel_image_name, &ret_file_type, &header);
-    if (err) {
-        return NULL;
-    }
-    /* Determine the load address */
-    switch (ret_file_type) {
-    case IMG_BIN:
-        if (config_set(CONFIG_PLAT_TX1) || config_set(CONFIG_PLAT_TX2) || config_set(CONFIG_PLAT_QEMU_ARM_VIRT)
-            || config_set(CONFIG_PLAT_ODROIDC2)) {
-            /* This is likely an aarch64/aarch32 linux difference */
-            load_addr = load_base_addr + 0x80000;
-        } else {
-            load_addr = load_base_addr + 0x8000;
-        }
-        break;
-    case IMG_ZIMAGE:
-        load_addr = zImage_get_load_address(&header, load_base_addr);
-        break;
-    default:
-        ZF_LOGE("Error: Unknown Linux image format for \'%s\'", kernel_image_name);
-        return NULL;
-    }
-    err = load_image(vm, kernel_image_name, load_addr, image_size);
-    if (err) {
-        return NULL;
-    }
-    return (void *)load_addr;
-}
-
 static void *load_guest_module_image(vm_t *vm, const char *image_name, uintptr_t load_base_addr, size_t *image_size)
 {
     int err;
@@ -257,21 +221,54 @@ static void *load_guest_module_image(vm_t *vm, const char *image_name, uintptr_t
     return (void *)load_addr;
 }
 
-int vm_load_guest_kernel(vm_t *vm, const char *kernel_name, uintptr_t load_address, size_t alignment,
-                         guest_kernel_image_t *guest_kernel_image)
+int vm_load_guest_kernel(vm_t *vm, const char *kernel_name, uintptr_t load_address,
+                         size_t alignment, guest_kernel_image_t *guest_kernel_image)
 {
-    void *load_addr;
-    size_t kernel_len;
+    int err;
+
     if (!guest_kernel_image) {
         ZF_LOGE("Invalid guest_image_t object");
         return -1;
     }
-    load_addr = load_guest_kernel_image(vm, kernel_name, load_address, &kernel_len);
-    if (!load_addr) {
+
+    enum img_type ret_file_type;
+    Elf64_Ehdr header = {0};
+    err = get_guest_image_type(kernel_name, &ret_file_type, &header);
+    if (err) {
+        ZF_LOGE("could not get guest image type");
         return -1;
     }
-    guest_kernel_image->kernel_image.load_paddr = (uintptr_t)load_addr;
-    guest_kernel_image->kernel_image.size = kernel_len;
+    /* Determine the load address */
+    switch (ret_file_type) {
+    case IMG_BIN:
+        if (config_set(CONFIG_PLAT_TX1) || config_set(CONFIG_PLAT_TX2)
+            || config_set(CONFIG_PLAT_QEMU_ARM_VIRT) || config_set(CONFIG_PLAT_ODROIDC2)) {
+            /* This is likely an aarch64/aarch32 linux difference */
+            load_address += 0x80000;
+        } else {
+            load_address += 0x8000;
+        }
+        break;
+    case IMG_ZIMAGE:
+        load_address = zImage_get_load_address(&header, load_address);
+        break;
+    default:
+        ZF_LOGE("Error: Unknown Linux image format for '%s'", kernel_name);
+        return -1;
+    }
+
+    size_t image_size;
+    err = load_image(vm, kernel_name, load_address, &image_size);
+    if (err) {
+        return -1;
+    }
+
+    guest_kernel_image->kernel_image = (guest_image_t) {
+        .load_paddr = load_address,
+        /* .alignment  = 0, */
+        .size = image_size
+    };
+
     return 0;
 }
 
