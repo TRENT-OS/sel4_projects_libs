@@ -22,9 +22,9 @@
 
 int vmm_pci_init(vmm_pci_space_t **space)
 {
-    vmm_pci_space_t *pci_space = (vmm_pci_space_t *)calloc(1, sizeof(vmm_pci_space_t));
+    vmm_pci_space_t *pci_space = (typeof(pci_space))calloc(1, sizeof(*pci_space));
     if (!pci_space) {
-        ZF_LOGE("Failed to calloc memory for pci space");
+        ZF_LOGE("Failed to calloc %u bytes of memory for pci space", sizeof(*pci_space));
         return -1;
     }
 

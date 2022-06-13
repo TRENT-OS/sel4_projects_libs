@@ -346,6 +346,9 @@ int vm_ram_register_at(vm_t *vm, uintptr_t start, size_t bytes, bool untyped)
     vm_memory_reservation_t *ram_reservation;
     int err;
 
+    ZF_LOGD("vm_ram_register_at(): 0x%"PRIxPTR" - 0x%"PRIxPTR" (%styped)",
+            start, start + bytes, untyped ? "un" : "");
+
     ram_reservation = vm_reserve_memory_at(vm, start, bytes, default_ram_fault_callback,
                                            NULL);
     if (!ram_reservation) {
