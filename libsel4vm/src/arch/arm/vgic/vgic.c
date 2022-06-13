@@ -388,10 +388,10 @@ static inline bool is_active(struct gic_dist_map *gic_dist, int irq, int vcpu_id
     return is_spi_active(gic_dist, irq);
 }
 
-static inline int vgic_irq_enqueue(vgic_t *vgic, vm_vcpu_t *vcpu, struct virq_handle *irq)
+static inline int vgic_irq_enqueue(vgic_vcpu_t *vgic_vcpu, struct virq_handle *virq)
 {
-    vgic_vcpu_t *vgic_vcpu = get_vgic_vcpu(vgic, vcpu->vcpu_id);
     assert(vgic_vcpu);
+    assert(virq);
     struct irq_queue *q = &vgic_vcpu->irq_queue;
 
     if (unlikely(IRQ_QUEUE_NEXT(q->tail) == q->head)) {
@@ -403,22 +403,21 @@ static inline int vgic_irq_enqueue(vgic_t *vgic, vm_vcpu_t *vcpu, struct virq_ha
     for (size_t i = q->head; i != q->tail; i = IRQ_QUEUE_NEXT(i)) {
         struct virq_handle *lst_virq = q->irqs[i];
         assert(lst_virq);
-        if (lst_virq == irq) {
-            ZF_LOGI("don't enqueue interrupt %d twice ", irq->virq);
+        if (lst_virq == virq) {
+            ZF_LOGI("don't enqueue interrupt %d twice ", virq->virq);
             return 0;
         }
-        assert(lst_virq->virq != irq->virq);
+        assert(lst_virq->virq != virq->virq);
     }
 
-    q->irqs[q->tail] = irq;
+    q->irqs[q->tail] = virq;
     q->tail = IRQ_QUEUE_NEXT(q->tail);
 
     return 0;
 }
 
-static inline struct virq_handle *vgic_irq_dequeue(vgic_t *vgic, vm_vcpu_t *vcpu)
+static inline struct virq_handle *vgic_irq_dequeue(vgic_vcpu_t *vgic_vcpu)
 {
-    vgic_vcpu_t *vgic_vcpu = get_vgic_vcpu(vgic, vcpu->vcpu_id);
     assert(vgic_vcpu);
     struct irq_queue *q = &vgic_vcpu->irq_queue;
     struct virq_handle *virq = NULL;
@@ -536,7 +535,9 @@ static int vgic_dist_set_pending_irq(struct vgic_dist_device *d, vm_vcpu_t *vcpu
     /* Enqueueing an IRQ and dequeueing it right after makes little sense
      * now, but in the future this is needed to support IRQ priorities.
      */
-    int err = vgic_irq_enqueue(vgic, vcpu, virq);
+    vgic_vcpu_t *vgic_vcpu = get_vgic_vcpu(vgic, vcpu->vcpu_id);
+    assert(vgic_vcpu);
+    int err = vgic_irq_enqueue(vgic_vcpu, virq_data);
     if (err) {
         ZF_LOGE("Failure enqueueing IRQ, increase MAX_IRQ_QUEUE_LEN");
         return -1;
@@ -551,7 +552,7 @@ static int vgic_dist_set_pending_irq(struct vgic_dist_device *d, vm_vcpu_t *vcpu
         return 0;
     }
 
-    virq = vgic_irq_dequeue(vgic, vcpu);
+    virq = vgic_irq_dequeue(vgic_vcpu);
     assert(virq);
 
     err = vgic_vcpu_load_list_reg(vgic, vcpu, idx, virq);
@@ -1161,7 +1162,7 @@ int vm_vgic_maintenance_handler(vm_vcpu_t *vcpu)
         set_pending(gic_dist, lr_virq->virq, false, vcpu->vcpu_id);
         virq_ack(vcpu, lr_virq);
         /* Check the overflow list for pending IRQs */
-        virq_handle_t virq = vgic_irq_dequeue(vgic, vcpu);
+        virq_handle_t virq = vgic_irq_dequeue(vgic_vcpu);
         if (virq) {
             int err = vgic_vcpu_load_list_reg(vgic, vcpu, idx, virq);
             if (err) {
