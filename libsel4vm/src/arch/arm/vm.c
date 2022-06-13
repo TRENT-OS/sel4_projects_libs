@@ -27,50 +27,6 @@
 #include "syscalls.h"
 #include "mem_abort.h"
 
-static int vm_user_exception_handler(vm_vcpu_t *vcpu);
-static int vm_vcpu_handler(vm_vcpu_t *vcpu);
-static int vm_unknown_exit_handler(vm_vcpu_t *vcpu);
-static int vm_vppi_event_handler(vm_vcpu_t *vcpu);
-
-static vm_exit_handler_fn_t arm_exit_handlers[] = {
-    [VM_GUEST_ABORT_EXIT] = vm_guest_mem_abort_handler,
-    [VM_SYSCALL_EXIT] = vm_syscall_handler,
-    [VM_USER_EXCEPTION_EXIT] = vm_user_exception_handler,
-    [VM_VGIC_MAINTENANCE_EXIT] = vm_vgic_maintenance_handler,
-    [VM_VCPU_EXIT] = vm_vcpu_handler,
-    [VM_VPPI_EXIT] = vm_vppi_event_handler,
-    [VM_UNKNOWN_EXIT] = vm_unknown_exit_handler
-};
-
-static int vm_decode_exit(seL4_Word label)
-{
-    int exit_reason = VM_UNKNOWN_EXIT;
-
-    switch (label) {
-    case seL4_Fault_VMFault:
-        exit_reason = VM_GUEST_ABORT_EXIT;
-        break;
-    case seL4_Fault_UnknownSyscall:
-        exit_reason = VM_SYSCALL_EXIT;
-        break;
-    case seL4_Fault_UserException:
-        exit_reason = VM_USER_EXCEPTION_EXIT;
-        break;
-    case seL4_Fault_VGICMaintenance:
-        exit_reason = VM_VGIC_MAINTENANCE_EXIT;
-        break;
-    case seL4_Fault_VCPUFault:
-        exit_reason = VM_VCPU_EXIT;
-        break;
-    case seL4_Fault_VPPIEvent:
-        exit_reason = VM_VPPI_EXIT;
-        break;
-    default:
-        exit_reason = VM_UNKNOWN_EXIT;
-    }
-    return exit_reason;
-}
-
 static int handle_exception(vm_vcpu_t *vcpu, seL4_Word ip)
 {
     seL4_UserContext regs;
@@ -155,13 +111,6 @@ static int vm_vcpu_handler(vm_vcpu_t *vcpu)
     return VM_EXIT_HANDLE_ERROR;
 }
 
-static int vm_unknown_exit_handler(vm_vcpu_t *vcpu)
-{
-    /* What? Why are we here? What just happened? */
-    ZF_LOGE("Unknown fault from [%s]", vcpu->vm->vm_name);
-    vcpu->vm->run.exit_reason = VM_GUEST_UNKNOWN_EXIT;
-    return VM_EXIT_HANDLE_ERROR;
-}
 
 static int vcpu_stop(vm_vcpu_t *vcpu)
 {
@@ -218,47 +167,98 @@ int vm_register_unhandled_vcpu_fault_callback(vm_vcpu_t *vcpu, unhandled_vcpu_fa
 
 }
 
+static int handle_fault(vm_vcpu_t *vcpu, seL4_Word exit_reason)
+{
+    switch (exit_reason) {
+
+    case seL4_Fault_VMFault: /* VM_GUEST_ABORT_EXIT */
+        return vm_guest_mem_abort_handler(vcpu);
+
+    case seL4_Fault_UnknownSyscall: /* VM_SYSCALL_EXIT */
+        return vm_syscall_handler(vcpu);
+
+    case seL4_Fault_UserException: /* VM_USER_EXCEPTION_EXIT */
+        return vm_user_exception_handler(vcpu);
+
+    case seL4_Fault_VGICMaintenance: /* VM_VGIC_MAINTENANCE_EXIT */
+        return vm_vgic_maintenance_handler(vcpu);
+
+    case seL4_Fault_VCPUFault: /* VM_VCPU_EXIT */
+        return vm_vcpu_handler(vcpu);
+
+    case seL4_Fault_VPPIEvent: /* VM_VPPI_EXIT */
+        return vm_vppi_event_handler(vcpu);
+
+    default: /* VM_UNKNOWN_EXIT */
+        break;
+    }
+
+    /* What? Why are we here? What just happened? */
+    ZF_LOGE("Unknown fault from [%s], VM exit_reason %"SEL4_PRIu_word,
+            vcpu->vm->vm_name, exit_reason);
+    vcpu->vm->run.exit_reason = VM_GUEST_UNKNOWN_EXIT;
+    return VM_EXIT_UNHANDLED;
+}
+
+
 int vm_run_arch(vm_t *vm)
 {
-    int err;
-    int ret;
-
-    ret = 1;
     /* Loop, handling events */
-    while (ret > 0) {
-        seL4_MessageInfo_t tag;
-        seL4_Word sender_badge;
-        seL4_Word label;
-        int vm_exit_reason;
+    for (;;) {
 
-        tag = seL4_Recv(vm->host_endpoint, &sender_badge);
-        label = seL4_MessageInfo_get_label(tag);
-        if (sender_badge >= MIN_VCPU_BADGE && sender_badge <= MAX_VCPU_BADGE) {
+        /* Blocking wait for an event */
+        seL4_Word sender_badge;
+        seL4_MessageInfo_t tag = seL4_Recv(vm->host_endpoint, &sender_badge);
+        if ((sender_badge >= MIN_VCPU_BADGE) && (sender_badge <= MAX_VCPU_BADGE)) {
+            /* resolve vCPU */
             seL4_Word vcpu_idx = VCPU_BADGE_IDX(sender_badge);
             if (vcpu_idx >= vm->num_vcpus) {
-                ZF_LOGE("Invalid VCPU index. Exiting");
-                ret = -1;
-            } else {
-                vm_exit_reason = vm_decode_exit(label);
-                ret = arm_exit_handlers[vm_exit_reason](vm->vcpus[vcpu_idx]);
-                if (ret == VM_EXIT_HANDLE_ERROR) {
-                    vm->run.exit_reason = VM_GUEST_ERROR_EXIT;
-                }
-            }
-        } else {
-            if (vm->run.notification_callback) {
-                err = vm->run.notification_callback(vm, sender_badge, tag,
-                                                    vm->run.notification_callback_cookie);
-            } else {
-                ZF_LOGE("Unable to handle VM notification. Exiting");
-                err = -1;
-            }
-            if (err) {
-                ret = -1;
+                ZF_LOGE("Invalid VCPU index %d. Exiting", vcpu_idx);
                 vm->run.exit_reason = VM_GUEST_ERROR_EXIT;
+                return -1;
             }
+            assert(vcpu_idx < ARRAY_SIZE(vm->vcpus));
+            vm_vcpu_t *vcpu = vm->vcpus[vcpu_idx];
+            seL4_Word exit_reason = seL4_MessageInfo_get_label(tag);
+            int ret = handle_fault(vcpu, exit_reason);
+            switch (ret) {
+                case VM_EXIT_HANDLE_ERROR: // -1
+                    ZF_LOGE("VM_EXIT_HANDLE_ERROR");
+                    vm->run.exit_reason = VM_GUEST_ERROR_EXIT;
+                    return ret;
+                case VM_EXIT_UNHANDLED: // 0
+                    ZF_LOGV("VM_EXIT_UNHANDLED");
+                    return ret;
+                case VM_EXIT_HANDLED: // 1
+                    /* Event was handled internally, continue the loop without
+                     * reporting the event to the caller
+                     */
+                    break;
+                default:
+                    ZF_LOGI("handler for exit_reason %"SEL4_PRIu_word" returned unknown code %d",
+                            exit_reason, ret);
+                    vcpu->vm->run.exit_reason = VM_GUEST_ERROR_EXIT;
+                    return -1;
+            }
+
+
+        } else if (vm->run.notification_callback) {
+            ZF_LOGI("VM callback notification");
+            int err = vm->run.notification_callback(vm, sender_badge, tag,
+                                                    vm->run.notification_callback_cookie);
+            if (err) {
+                ZF_LOGE("VM callback failed, code %d", err);
+                vm->run.exit_reason = VM_GUEST_ERROR_EXIT;
+                return -1;
+            }
+
+        } else {
+            ZF_LOGE("Unable to handle VM notification with sender"
+                    " badge %"SEL4_PRIu_word". Exiting", sender_badge);
+            vm->run.exit_reason = VM_GUEST_ERROR_EXIT;
+            return -1;
         }
     }
 
-    return ret;
+    UNREACHABLE();
 }
