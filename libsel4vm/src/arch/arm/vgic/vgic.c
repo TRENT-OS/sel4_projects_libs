@@ -444,6 +444,16 @@ static inline int vgic_irq_enqueue(vgic_t *vgic, vm_vcpu_t *vcpu, struct virq_ha
         return -1;
     }
 
+    /* Don't enqueue if the interrupt is already in the queue. */
+    for (size_t i = q->head; i != q->tail; i = IRQ_QUEUE_NEXT(i)) {
+        struct virq_handle *lst_virq = q->irqs[i];
+        assert(lst_virq);
+        if (lst_virq == irq) {
+            return 0;
+        }
+        assert(lst_virq->virq != irq->virq);
+    }
+
     q->irqs[q->tail] = irq;
     q->tail = IRQ_QUEUE_NEXT(q->tail);
 
