@@ -483,7 +483,12 @@ int handle_vgic_maintenance(vm_vcpu_t *vcpu, int idx)
     /* Check the overflow list for pending IRQs */
     struct virq_handle *virq = vgic_irq_dequeue(vgic, vcpu);
     if (virq) {
-        return vgic_vcpu_load_list_reg(vgic, vcpu, idx, virq);
+        int err = vgic_vcpu_load_list_reg(vgic, vcpu, idx, virq);
+        if (err) {
+            ZF_LOGF("Failure loading vGIC LR[%d] on vCPU %d, error %d",
+                    idx, vcpu->vcpu_id, err);
+            return err;
+        }
     }
 
     return 0;
@@ -564,7 +569,7 @@ static int vgic_dist_set_pending_irq(struct vgic_dist_device *d, vm_vcpu_t *vcpu
      */
     int err = vgic_irq_enqueue(vgic, vcpu, virq);
     if (err) {
-        ZF_LOGF("Failure enqueueing IRQ, increase MAX_IRQ_QUEUE_LEN");
+        ZF_LOGE("Failure enqueueing IRQ, increase MAX_IRQ_QUEUE_LEN");
         return -1;
     }
 
@@ -580,7 +585,14 @@ static int vgic_dist_set_pending_irq(struct vgic_dist_device *d, vm_vcpu_t *vcpu
     virq = vgic_irq_dequeue(vgic, vcpu);
     assert(virq);
 
-    return vgic_vcpu_load_list_reg(vgic, vcpu, idx, virq);
+    err = vgic_vcpu_load_list_reg(vgic, vcpu, idx, virq);
+    if (err) {
+        ZF_LOGE("Failure loading vGIC LR[%d] on vCPU %d, error %d",
+                idx, vcpu->vcpu_id, err);
+        return err;
+    }
+
+    return 0;
 }
 
 static int vgic_dist_clr_pending_irq(struct vgic_dist_device *d, vm_vcpu_t *vcpu, int irq)
@@ -823,10 +835,10 @@ static memory_fault_result_t handle_vgic_dist_write_fault(vm_t *vm, vm_vcpu_t *v
             irq = CTZ(data);
             data &= ~(1U << irq);
             irq += (offset - GIC_DIST_ISPENDR0) * 8;
-            /* Set the interrupt as pending. Ignore errors, because there is
-             * nothing we can do here.
-             */
-            (void)vgic_dist_set_pending_irq(d, vcpu, irq);
+            int err = vgic_dist_set_pending_irq(d, vcpu, irq);
+            if (err) {
+                ZF_LOGF("Failure setting IRQ %d pending (vCPU %d)", irq, vcpu->vcpu_id);
+            }
         }
         break;
     case RANGE32(GIC_DIST_ICPENDR0, GIC_DIST_ICPENDRN):
@@ -1055,6 +1067,8 @@ int vm_inject_irq(vm_vcpu_t *vcpu, int irq)
     DIRQ("VM received IRQ %d\n", irq);
 
     int err = vgic_dist_set_pending_irq(vgic_dist, vcpu, irq);
+    ZF_LOGF_IF(err, "Failure setting injected IRQ %d pending (vCPU %d)",
+               irq, vcpu->vcpu_id);
 
     if (!fault_handled(vcpu->vcpu_arch.fault) && fault_is_wfi(vcpu->vcpu_arch.fault)) {
         ignore_fault(vcpu->vcpu_arch.fault);
