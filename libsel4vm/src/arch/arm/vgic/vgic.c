@@ -395,6 +395,7 @@ static inline int vgic_irq_enqueue(vgic_t *vgic, vm_vcpu_t *vcpu, struct virq_ha
     struct irq_queue *q = &vgic_vcpu->irq_queue;
 
     if (unlikely(IRQ_QUEUE_NEXT(q->tail) == q->head)) {
+        ZF_LOGF("Failure enqueueing IRQ, increase MAX_IRQ_QUEUE_LEN");
         return -1;
     }
 
@@ -403,6 +404,7 @@ static inline int vgic_irq_enqueue(vgic_t *vgic, vm_vcpu_t *vcpu, struct virq_ha
         struct virq_handle *lst_virq = q->irqs[i];
         assert(lst_virq);
         if (lst_virq == irq) {
+            ZF_LOGI("don't enqueue interrupt %d twice ", irq->virq);
             return 0;
         }
         assert(lst_virq->virq != irq->virq);
@@ -1005,6 +1007,7 @@ static void vgic_dist_reset(struct vgic_dist_device *d)
 
 int vm_register_irq(vm_vcpu_t *vcpu, int irq, irq_ack_fn_t ack_fn, void *cookie)
 {
+    ZF_LOGI("register IRQ %d (vCPU %d)", irq, vcpu->vcpu_id);
     assert(vcpu);
     assert(irq >= 0);
 
@@ -1090,6 +1093,7 @@ static memory_fault_result_t handle_vgic_vcpu_fault(vm_t *vm, vm_vcpu_t *vcpu, u
 
 static vm_frame_t vgic_vcpu_iterator(uintptr_t addr, void *cookie)
 {
+    ZF_LOGI("addr = %p", addr);
     cspacepath_t frame;
     vm_frame_t frame_result = { seL4_CapNull, seL4_NoRights, 0, 0 };
     vm_t *vm = (vm_t *)cookie;
