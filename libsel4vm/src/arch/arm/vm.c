@@ -22,10 +22,10 @@
 #include "arm_vm.h"
 #include "arm_vm_exits.h"
 #include "fault.h"
+#include "guest_memory.h" /* this is NOT <sel4vm/guest_memory.h> */
 
 #include "vgic/vgic.h"
 #include "syscalls.h"
-#include "mem_abort.h"
 
 static int handle_exception(vm_vcpu_t *vcpu, seL4_Word ip)
 {
@@ -106,6 +106,64 @@ static int vm_vcpu_handler(vm_vcpu_t *vcpu)
     printf("ISS Value: 0x%x\n", hsr & HSR_ISS_MASK);
     printf("==============================================\n");
 
+    return VM_EXIT_HANDLE_ERROR;
+}
+
+int vm_guest_mem_abort_handler(vm_vcpu_t *vcpu)
+{
+    fault_t *fault = vcpu->vcpu_arch.fault;
+    int err = new_memory_fault(fault);
+    if (err) {
+        ZF_LOGE("Failed to initialise new fault");
+        return VM_EXIT_HANDLE_ERROR;
+    }
+
+    vm_t *vm = vcpu->vm;
+    memory_fault_result_t res = vm_memory_handle_fault(vm, vcpu, fault);
+
+    /* Try calling the user supplied fault handler for unhandled faults. */
+    if (FAULT_UNHANDLED == res) {
+        unhandled_mem_fault_callback_fn handler = vm->mem.unhandled_mem_fault_handler;
+        if (handler) {
+            res = handler(vm, vcpu, fault, vm->mem.unhandled_mem_fault_cookie);
+            if (FAULT_UNHANDLED == res) {
+                /* Don't use the code path below that dumps and abandons the
+                 * fault because it is assume that the user's handler does.
+                 * something like this anyway. It should return FAULT_ERROR if
+                 * it wants us to do it.
+                 */
+                return VM_EXIT_HANDLE_ERROR;
+            }
+        }
+    }
+
+    switch (res) {
+
+    case FAULT_HANDLED:
+        return VM_EXIT_HANDLED;
+
+    case FAULT_RESTART:
+        restart_fault(fault);
+        return VM_EXIT_HANDLED;
+
+    case FAULT_IGNORE:
+        return ignore_fault(fault);
+
+    case FAULT_UNHANDLED:
+        break;
+
+    case FAULT_ERROR:
+        break;
+
+    default:
+        ZF_LOGW("unknown fault result %d", res);
+        break;
+        /* We don't have a memory reservation for the faulting address
+         * We move onto the rest of the page fault handler */
+    }
+
+    print_fault(fault);
+    abandon_fault(fault);
     return VM_EXIT_HANDLE_ERROR;
 }
 

@@ -14,6 +14,7 @@
 #include <sel4vm/guest_memory.h>
 
 #include "guest_memory.h"
+#include "fault.h"
 
 typedef enum reservation_type {
     MEM_REGULAR_RES,
@@ -264,9 +265,11 @@ static vm_memory_reservation_t *find_anon_reservation_by_addr(uintptr_t addr, si
     return NULL;
 }
 
-memory_fault_result_t vm_memory_handle_fault(vm_t *vm, vm_vcpu_t *vcpu, uintptr_t addr, size_t size)
+memory_fault_result_t vm_memory_handle_fault(vm_t *vm, vm_vcpu_t *vcpu, fault_t *fault)
 {
     int err;
+    uintptr_t addr = fault_get_address(fault);
+    size_t size = fault_get_width_size(fault);
     res_tree *reservation_node = find_memory_reservation_by_addr(vm, addr);
     vm_memory_reservation_t *fault_reservation;
 

@@ -13,11 +13,10 @@
  * Handle a vm memory fault through searching previously created reservations and invoking the appropriate fault callback
  * @param {vm_t *} vm               A handle to the VM
  * @param {vm_vcpu_t *} vcpu        A handle to the faulting vcpu
- * @param {uintptr_t} addr          Faulting address
- * @param {size_t} size             Size of the faulting region
+ * @param {fault_t *} fault         The fault
  * @return                          Fault handling status code: HANDLED, UNHANDLED, RESTART, ERROR
  */
-memory_fault_result_t vm_memory_handle_fault(vm_t *vm, vm_vcpu_t *vcpu, uintptr_t addr, size_t size);
+memory_fault_result_t vm_memory_handle_fault(vm_t *vm, vm_vcpu_t *vcpu, fault_t *fault);
 
 /**
  * Map a vm memory reservation - this invokation is performed immediately (mapping is not deferred)

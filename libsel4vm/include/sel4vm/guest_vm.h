@@ -33,13 +33,12 @@ typedef struct vm_arch vm_arch_t;
  * Type signature of unhandled memory fault function, invoked when a memory fault is unable to be handled
  * @param {vm_t *} vm           A handle to the VM
  * @param {vm_vcpu_t *} vcpu    A handle to the fault vcpu
- * @param {uintptr_t} paddr     Faulting guest physical address
- * @param {size_t} len          Length of faulted access
+ * @param {fault_t *} fault     The fault
  * @param {void *} cookie       User cookie to pass onto callback
  * @return                      Fault handling status code: HANDLED, UNHANDLED, RESTART, ERROR
  */
-typedef memory_fault_result_t (*unhandled_mem_fault_callback_fn)(vm_t *vm, vm_vcpu_t *vcpu, uintptr_t paddr,
-                                                                 size_t len, void *cookie);
+typedef memory_fault_result_t (*unhandled_mem_fault_callback_fn)(vm_t *vm, vm_vcpu_t *vcpu, fault_t *fault,
+                                                                 void *cookie);
 
 /**
  * Type signature of unhandled notification callback, invoked when a notification is recieved and cannot be processed

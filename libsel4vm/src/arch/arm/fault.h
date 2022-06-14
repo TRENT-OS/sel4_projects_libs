@@ -64,7 +64,6 @@ struct fault {
 /// The active content within the fault structure to allow lazy loading
     int content;
 };
-typedef struct fault fault_t;
 
 /**
  * Initialise a fault structure.
