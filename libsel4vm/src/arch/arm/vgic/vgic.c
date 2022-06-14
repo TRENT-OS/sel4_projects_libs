@@ -70,32 +70,6 @@
 #define DDIST(...) do{}while(0)
 #endif
 
-/* FIXME these should be defined in a way that is friendlier to extension. */
-#if defined(CONFIG_PLAT_EXYNOS5)
-#define GIC_PADDR   0x10480000
-#elif defined(CONFIG_PLAT_TK1) || defined(CONFIG_PLAT_TX1)
-#define GIC_PADDR   0x50040000
-#elif defined(CONFIG_PLAT_TX2)
-#define GIC_PADDR   0x03880000
-#elif defined(CONFIG_PLAT_QEMU_ARM_VIRT)
-#define GIC_PADDR   0x8000000
-#elif defined(CONFIG_PLAT_ODROIDC2)
-#define GIC_PADDR   0xc4300000
-#else
-#error "Unsupported platform for GIC"
-#endif
-
-#ifdef CONFIG_PLAT_QEMU_ARM_VIRT
-#define GIC_DIST_PADDR       (GIC_PADDR)
-#define GIC_CPU_PADDR        (GIC_PADDR + 0x00010000)
-#define GIC_VCPU_CNTR_PADDR  (GIC_PADDR + 0x00030000)
-#define GIC_VCPU_PADDR       (GIC_PADDR + 0x00040000)
-#else
-#define GIC_DIST_PADDR       (GIC_PADDR + 0x1000)
-#define GIC_CPU_PADDR        (GIC_PADDR + 0x2000)
-#define GIC_VCPU_CNTR_PADDR  (GIC_PADDR + 0x4000)
-#define GIC_VCPU_PADDR       (GIC_PADDR + 0x6000)
-#endif
 
 /* The ARM GIC architecture defines 16 SGIs (0 - 7 is recommended for non-secure
  * state, 8 - 15 for secure state), 16 PPIs (interrupt 16 - 31) and 988 SPIs
@@ -134,7 +108,7 @@ static inline void virq_ack(vm_vcpu_t *vcpu, virq_t *virq)
 }
 
 /* Memory map for GIC distributor */
-typedef struct gic_dist_map {
+typedef struct {
     uint32_t enable;                                    /* 0x000 */
     uint32_t ic_type;                                   /* 0x004 */
     uint32_t dist_ident;                                /* 0x008 */
@@ -183,7 +157,7 @@ typedef struct gic_dist_map {
 
     uint32_t periph_id[12];                             /* [0xFC0, 0xFF0) */
     uint32_t component_id[4];                           /* [0xFF0, 0xFFF] */
-} gic_dist_map_t;
+} vgic_vdist_t;
 
 /* TODO: A typical number of list registers supported by GIC is four, but not
  * always. One particular way to probe the number of registers is to inject a
@@ -226,15 +200,25 @@ typedef struct vgic_vcpu {
 
 /* GIC global interrupt context */
 typedef struct vgic {
+    seL4_Word paddr;
     /* virtual distributor registers */
-    struct gic_dist_map *dist;
+    vgic_vdist_t *dist;
     /* registered global interrupts (SPI) */
     virq_handle_t vspis[NUM_SLOTS_SPI_VIRQ];
     /* vCPU specific interrupt context */
     vgic_vcpu_t vgic_vcpu[CONFIG_MAX_NUM_NODES];
 } vgic_t;
 
-static struct vgic_dist_device *vgic_dist;
+/* static struct vgic_dist_device *vgic_dist_dev; */
+static vgic_t * the_vgic;
+
+static vgic_t *get_vgic(void)
+{
+    // assert(vgic_dist_dev);
+    // vgic_t *vgic = (typeof(vgic))(vgic_dist_dev->priv);
+    assert(the_vgic);
+    return the_vgic;
+}
 
 static vgic_vcpu_t *get_vgic_vcpu(vgic_t *vgic, int vcpu_id)
 {
@@ -243,7 +227,7 @@ static vgic_vcpu_t *get_vgic_vcpu(vgic_t *vgic, int vcpu_id)
     return &(vgic->vgic_vcpu[vcpu_id]);
 }
 
-static virq_t *virq_find_irq(struct vgic *vgic, vm_vcpu_t *vcpu, int irq)
+static virq_t *virq_find_irq(vgic_t *vgic, vm_vcpu_t *vcpu, int irq)
 {
     assert(irq >= 0);
 
@@ -267,21 +251,7 @@ static virq_t *virq_find_irq(struct vgic *vgic, vm_vcpu_t *vcpu, int irq)
     return NULL;
 }
 
-
-static inline struct vgic *vgic_device_get_vgic(struct vgic_dist_device *d)
-{
-    assert(d);
-    assert(d->priv);
-    return (vgic_t *)d->priv;
-}
-
-static inline struct gic_dist_map *vgic_priv_get_dist(struct vgic_dist_device *d)
-{
-    assert(d);
-    return vgic_device_get_vgic(d)->dist;
-}
-
-static inline void set_pending(struct gic_dist_map *gic_dist, int irq, bool set_pending, int vcpu_id)
+static inline void set_pending(vgic_vdist_t *gic_dist, int irq, bool set_pending, int vcpu_id)
 {
     uint32_t irq_bit = IRQ_BIT(irq);
     int idx = IRQ_IDX(irq);
@@ -300,14 +270,14 @@ static inline void set_pending(struct gic_dist_map *gic_dist, int irq, bool set_
     }
 }
 
-static inline bool is_pending(struct gic_dist_map *gic_dist, int irq, int vcpu_id)
+static inline bool is_pending(vgic_vdist_t *gic_dist, int irq, int vcpu_id)
 {
     uint32_t val = (irq < NUM_VCPU_LOCAL_VIRQS) ? gic_dist->pending_set0[vcpu_id]
                    : gic_dist->pending_set[IRQ_IDX(irq)];
     return !!(val & IRQ_BIT(irq));
 }
 
-static inline void set_enable(struct gic_dist_map *gic_dist, int irq, bool set_enable, int vcpu_id)
+static inline void set_enable(vgic_vdist_t *gic_dist, int irq, bool set_enable, int vcpu_id)
 {
     uint32_t irq_bit = IRQ_BIT(irq);
     int idx = IRQ_IDX(irq);
@@ -326,14 +296,14 @@ static inline void set_enable(struct gic_dist_map *gic_dist, int irq, bool set_e
     }
 }
 
-static inline bool is_enabled(struct gic_dist_map *gic_dist, int irq, int vcpu_id)
+static inline bool is_enabled(vgic_vdist_t *gic_dist, int irq, int vcpu_id)
 {
     uint32_t val = (irq < NUM_VCPU_LOCAL_VIRQS) ? gic_dist->enable_set0[vcpu_id]
                    : gic_dist->enable_set[IRQ_IDX(irq)];
     return !!(val & IRQ_BIT(irq));
 }
 
-static inline void set_active(struct gic_dist_map *gic_dist, int irq, bool set_active, int vcpu_id)
+static inline void set_active(vgic_vdist_t *gic_dist, int irq, bool set_active, int vcpu_id)
 {
     uint32_t irq_bit = IRQ_BIT(irq);
     int idx = IRQ_IDX(irq);
@@ -346,7 +316,7 @@ static inline void set_active(struct gic_dist_map *gic_dist, int irq, bool set_a
     }
 }
 
-static inline bool is_active(struct gic_dist_map *gic_dist, int irq, int vcpu_id)
+static inline bool is_active(vgic_vdist_t *gic_dist, int irq, int vcpu_id)
 {
     uint32_t val = (irq < NUM_VCPU_LOCAL_VIRQS) ? gic_dist->active0[vcpu_id]
                    : gic_dist->active[IRQ_IDX(irq)];
@@ -429,7 +399,7 @@ static seL4_Error vgic_inject_virq(vgic_vcpu_t *vgic_vcpu, vm_vcpu_t *vcpu,
 static void vgic_dist_enable_irq(vgic_t *vgic, vm_vcpu_t *vcpu, int irq)
 {
     assert(vgic);
-    struct gic_dist_map *dist = vgic->dist;
+    vgic_vdist_t *dist = vgic->dist;
     assert(dist);
 
     DDIST("enabling irq %d\n", irq);
@@ -448,7 +418,7 @@ static void vgic_dist_enable_irq(vgic_t *vgic, vm_vcpu_t *vcpu, int irq)
 static void vgic_dist_disable_irq(vgic_t *vgic, vm_vcpu_t *vcpu, int irq)
 {
     assert(vgic);
-    struct gic_dist_map *dist = vgic->dist;
+    vgic_vdist_t *dist = vgic->dist;
     assert(dist);
 
     /* STATE g)
@@ -468,7 +438,7 @@ static void vgic_dist_disable_irq(vgic_t *vgic, vm_vcpu_t *vcpu, int irq)
 static int vgic_dist_set_pending_irq(vgic_t *vgic, vm_vcpu_t *vcpu, int irq)
 {
     /* STATE c) */
-    struct gic_dist_map *dist = vgic->dist;
+    vgic_vdist_t *dist = vgic->dist;
     assert(dist);
 
     virq_t *virq = virq_find_irq(vgic, vcpu, irq);
@@ -545,7 +515,7 @@ static int vgic_dist_set_pending_irq(vgic_t *vgic, vm_vcpu_t *vcpu, int irq)
 
 static int vgic_dist_clr_pending_irq(vgic_t *vgic, vm_vcpu_t *vcpu, int irq)
 {
-    struct gic_dist_map *dist = vgic->dist;
+    vgic_vdist_t *dist = vgic->dist;
     assert(dist);
 
     DDIST("clr pending irq %d\n", irq);
@@ -890,15 +860,24 @@ ignore_fault:
     return FAULT_HANDLED;
 }
 
-static memory_fault_result_t handle_vgic_dist_fault(vm_t *vm, vm_vcpu_t *vcpu, uintptr_t fault_addr,
+static memory_fault_result_t handle_vgic_dist_fault(vm_t *vm, vm_vcpu_t *vcpu,
+                                                    uintptr_t fault_addr,
                                                     size_t fault_length,
                                                     void *cookie)
 {
-    struct vgic_dist_device *dev = (struct vgic_dist_device *)cookie;
-    assert(dev);
-    vgic_t *vgic = (typeof(vgic))(dev->priv);
+    /*
+     * struct vgic_dist_device *dev = (struct vgic_dist_device *)cookie;
+     * assert(dev);
+     * vgic_t *vgic = (typeof(vgic))(dev->priv);
+     */
+    vgic_t *vgic = (typeof(vgic))cookie;
     assert(vgic);
+    seL4_Word paddr = vgic->paddr;
 
+    /* Seems there is a layer that populated vcpu->vcpu_arch.fault with the
+     * parameters 'fault_addr' and 'fault_length' we get passed. Check that
+     * things match.
+     */
     fault_t *fault = vcpu->vcpu_arch.fault;
     assert(fault);
     seL4_Word fault_phys_addr = fault_get_address(fault);
@@ -906,22 +885,21 @@ static memory_fault_result_t handle_vgic_dist_fault(vm_t *vm, vm_vcpu_t *vcpu, u
         ZF_LOGF("fault_phys_addr %#"SEL4_PRIx_word" != fault_addr %p",
                 fault_phys_addr, fault_addr);
     }
-    if (fault_phys_addr < dev->pstart) {
-        ZF_LOGF("fault_phys_addr %#"SEL4_PRIx_word" < dev->pstart %p",
-                fault_phys_addr, (void*)dev->pstart);
-    }
-    int offset = fault_phys_addr - dev->pstart;
 
-    if (fault_is_read(vcpu->vcpu_arch.fault)) {
+    if (fault_addr < paddr) {
+        ZF_LOGF("fault_addr %#"SEL4_PRIx_word" < vgic->padd %#"SEL4_PRIx_word,
+                fault_addr, paddr);
+    }
+    int offset = fault_addr - paddr;
+
+    if (fault_is_read(fault)) {
         return handle_vgic_dist_read_fault(vm, vcpu, vgic, offset, fault);
     }
     return handle_vgic_dist_write_fault(vm, vcpu, vgic, offset, fault);
 }
 
-static void vgic_dist_reset(struct vgic_dist_device *d)
+static void vgic_dist_reset(vgic_vdist_t *gic_dist)
 {
-    struct gic_dist_map *gic_dist;
-    gic_dist = vgic_priv_get_dist(d);
     memset(gic_dist, 0, sizeof(*gic_dist));
     gic_dist->ic_type         = 0x0000fce7; /* RO */
     gic_dist->dist_ident      = 0x0200043b; /* RO */
@@ -979,7 +957,7 @@ int vm_register_irq(vm_vcpu_t *vcpu, int irq, irq_ack_fn_t ack_fn, void *cookie)
     assert(vcpu);
     assert(irq >= 0);
 
-    struct vgic *vgic = vgic_device_get_vgic(vgic_dist);
+    struct vgic *vgic = get_vgic();
     assert(vgic);
     vgic_vcpu_t *vgic_vcpu = get_vgic_vcpu(vgic, vcpu->vcpu_id);
     assert(vgic_vcpu);
@@ -1037,7 +1015,7 @@ int vm_inject_irq(vm_vcpu_t *vcpu, int irq)
 
     DIRQ("VM received IRQ %d\n", irq);
 
-    vgic_t *vgic = vgic_device_get_vgic(vgic_dist);
+    vgic_t *vgic = get_vgic();
     assert(vgic);
 
     int err = vgic_dist_set_pending_irq(vgic, vcpu, irq);
@@ -1053,90 +1031,8 @@ int vm_inject_irq(vm_vcpu_t *vcpu, int irq)
     return err;
 }
 
-static memory_fault_result_t handle_vgic_vcpu_fault(vm_t *vm, vm_vcpu_t *vcpu, uintptr_t fault_addr,
-                                                    size_t fault_length,
-                                                    void *cookie)
+int vm_vgic_maintenance_handler(vm_vcpu_t *vcpu, int idx)
 {
-    /* We shouldn't fault on the vgic vcpu region as it should be mapped in
-     * with all rights */
-    return FAULT_ERROR;
-}
-
-static vm_frame_t vgic_vcpu_iterator(uintptr_t addr, void *cookie)
-{
-    ZF_LOGI("addr = %p", addr);
-    cspacepath_t frame;
-    vm_frame_t frame_result = { seL4_CapNull, seL4_NoRights, 0, 0 };
-    vm_t *vm = (vm_t *)cookie;
-
-    int err = vka_cspace_alloc_path(vm->vka, &frame);
-    if (err) {
-        ZF_LOGE("Failed to allocate cslot for vgic vcpu");
-        return frame_result;
-    }
-    seL4_Word vka_cookie;
-    err = vka_utspace_alloc_at(vm->vka, &frame, kobject_get_type(KOBJECT_FRAME, 12), 12, GIC_VCPU_PADDR, &vka_cookie);
-    if (err) {
-        err = simple_get_frame_cap(vm->simple, (void *)GIC_VCPU_PADDR, 12, &frame);
-        if (err) {
-            ZF_LOGE("Failed to find device cap for vgic vcpu");
-            return frame_result;
-        }
-    }
-    frame_result.cptr = frame.capPtr;
-    frame_result.rights = seL4_AllRights;
-    frame_result.vaddr = GIC_CPU_PADDR;
-    frame_result.size_bits = seL4_PageBits;
-    return frame_result;
-}
-
-/*
- * 1) completely virtual the distributor
- * 2) remap vcpu to cpu. Full access
- */
-int vm_install_vgic(vm_t *vm)
-{
-    struct vgic *vgic = calloc(1, sizeof(*vgic));
-    if (!vgic) {
-        assert(!"Unable to calloc memory for VGIC");
-        return -1;
-    }
-    /* vgic doesn't require further initialization, having all fields set to
-     * zero is fine.
-     */
-
-    /* Distributor */
-    vgic_dist = (struct vgic_dist_device *)calloc(1, sizeof(struct vgic_dist_device));
-    if (!vgic_dist) {
-        return -1;
-    }
-    memcpy(vgic_dist, &dev_vgic_dist, sizeof(struct vgic_dist_device));
-
-    vgic->dist = calloc(1, sizeof(struct gic_dist_map));
-    assert(vgic->dist);
-    if (vgic->dist == NULL) {
-        return -1;
-    }
-    vm_memory_reservation_t *vgic_dist_res = vm_reserve_memory_at(vm, GIC_DIST_PADDR, PAGE_SIZE_4K,
-                                                                  handle_vgic_dist_fault, (void *)vgic_dist);
-    vgic_dist->priv = (void *)vgic;
-    vgic_dist_reset(vgic_dist);
-
-    /* Remap VCPU to CPU */
-    vm_memory_reservation_t *vgic_vcpu_reservation = vm_reserve_memory_at(vm, GIC_CPU_PADDR,
-                                                                          0x1000, handle_vgic_vcpu_fault, NULL);
-    int err = vm_map_reservation(vm, vgic_vcpu_reservation, vgic_vcpu_iterator, (void *)vm);
-    if (err) {
-        free(vgic_dist->priv);
-        return -1;
-    }
-
-    return 0;
-}
-
-int vm_vgic_maintenance_handler(vm_vcpu_t *vcpu)
-{
-    int idx = seL4_GetMR(seL4_VGICMaintenance_IDX);
     /* Currently not handling spurious IRQs */
     assert(idx >= 0);
 
@@ -1176,12 +1072,179 @@ int vm_vgic_maintenance_handler(vm_vcpu_t *vcpu)
         }
     }
 
-    seL4_Reply(seL4_MessageInfo_new(0, 0, 0, 0));
     return VM_EXIT_HANDLED;
 }
 
-const struct vgic_dist_device dev_vgic_dist = {
-    .pstart = GIC_DIST_PADDR,
-    .size = 0x1000,
-    .priv = NULL,
-};
+static memory_fault_result_t handle_vgic_vcpu_fault(vm_t *vm, vm_vcpu_t *vcpu, uintptr_t fault_addr,
+                                                    size_t fault_length,
+                                                    void *cookie)
+{
+    assert(!cookie); /* there is no cookie set up */
+
+    /* We shouldn't fault on the vgic vcpu region as it should be mapped in
+     * with all rights
+     */
+    return FAULT_ERROR;
+}
+
+/* FIXME these should be defined in a way that is friendlier to extension. */
+#if defined(CONFIG_PLAT_EXYNOS5)
+#define GIC_PADDR   0x10480000
+#elif defined(CONFIG_PLAT_TK1) || defined(CONFIG_PLAT_TX1)
+#define GIC_PADDR   0x50040000
+#elif defined(CONFIG_PLAT_TX2)
+#define GIC_PADDR   0x03880000
+#elif defined(CONFIG_PLAT_QEMU_ARM_VIRT)
+#define GIC_PADDR   0x8000000
+#elif defined(CONFIG_PLAT_ODROIDC2)
+#define GIC_PADDR   0xc4300000
+#else
+#error "Unsupported platform for GIC"
+#endif
+
+#ifdef CONFIG_PLAT_QEMU_ARM_VIRT
+#define GIC_DIST_OFFSET         0
+#define GIC_CPU_OFFSET          0x10000
+//#define GIC_VCPU_CNTR_OFFSET    0x30000
+#define GIC_VCPU_OFFSET         0x40000
+/*
+ * QEMU supports GICv2M or ITS as Message Signaled Interrupt (MSI) controller.
+ * GICv2M (at 0x8020000) is selected by default along with GICv2. ITS is
+ * selected by default with GICv3 (>= virt-2.7). Note that ITS is not modeled in
+ * TCG mode.
+ *
+ * GICv2m enables MSIs to set GICv2 Shared Peripheral Interrupts (SPIs) to
+ * pending. The GICv2m provides a similar mechanism to the message-based
+ * interrupt features added in GICv3.
+ *
+ * We do not support GICv2m, accesses are ignored and registers read a zero.
+ */
+#else
+#define GIC_DIST_OFFSET         0x1000
+#define GIC_CPU_OFFSET          0x2000
+//#define GIC_VCPU_CNTR_OFFSET    0x4000
+#define GIC_VCPU_OFFSET         0x6000
+#endif
+
+#define GIC_DIST_PADDR       (GIC_PADDR + GIC_DIST_OFFSET)
+#define GIC_CPU_PADDR        (GIC_PADDR + GIC_CPU_OFFSET)
+//#define GIC_VCPU_CNTR_PADDR  (GIC_PADDR + GIC_VCPU_CNTR_OFFSET)
+#define GIC_VCPU_PADDR       (GIC_PADDR + GIC_VCPU_OFFSET)
+
+
+static vm_frame_t vgic_vcpu_iterator(uintptr_t addr, void *cookie)
+{
+    ZF_LOGI("vGIC vCPU iterator, addr = %p", addr);
+    vm_t *vm = (vm_t *)cookie;
+    cspacepath_t frame;
+    int err = vka_cspace_alloc_path(vm->vka, &frame);
+    if (err) {
+        ZF_LOGE("Failed to allocate cslot for vgic vcpu");
+        return (vm_frame_t){ /* any field not mentioned is zero'd */
+            .cptr      = seL4_CapNull,
+            .rights    = seL4_NoRights
+        };
+    }
+    seL4_Word vka_cookie; /* unused */
+    err = vka_utspace_alloc_at(vm->vka, &frame,
+                               kobject_get_type(KOBJECT_FRAME, seL4_PageBits),
+                               seL4_PageBits, GIC_VCPU_PADDR, &vka_cookie);
+    if (err) {
+        err = simple_get_frame_cap(vm->simple, (void *)GIC_VCPU_PADDR,
+                                   seL4_PageBits, &frame);
+        if (err) {
+            ZF_LOGE("Failed to find device cap for vgic vcpu");
+            return (vm_frame_t){ /* any field not mentioned is zero'd */
+                .cptr      = seL4_CapNull,
+                .rights    = seL4_NoRights
+            };
+        }
+    }
+
+    return (vm_frame_t){ /* any field not mentioned is zero'd */
+        .cptr      = frame.capPtr,
+        .rights    = seL4_AllRights,
+        .vaddr     = GIC_CPU_PADDR,
+        .size_bits = seL4_PageBits
+    };
+}
+
+/*
+ * 1) completely virtual the distributor
+ * 2) remap vcpu to cpu. Full access
+ */
+int vm_install_vgic(vm_t *vm)
+{
+    seL4_Word paddr_gic_dist = GIC_DIST_PADDR;
+    seL4_Word paddr_gic_cpu  = GIC_CPU_PADDR;
+    seL4_Word paddr_gic_vcpu = GIC_VCPU_PADDR;
+
+    ZF_LOGI("installing vGIC at dist=%#"SEL4_PRIx_word
+            ", cpu=%#"SEL4_PRIx_word
+            ", vcpu=%#"SEL4_PRIx_word,
+            paddr_gic_dist, paddr_gic_cpu, paddr_gic_vcpu);
+
+    vgic_t *vgic = calloc(1, sizeof(*vgic));
+    if (!vgic) {
+        assert(!"Unable to calloc memory for VGIC");
+        return -1;
+    }
+    /* vgic doesn't require further initialization, having all fields set to
+     * zero is fine.
+     */
+
+    /* We can skip the initialization, because all memory is zerod anyway.
+     *
+     *    memset(vgic->virqs, 0, sizeof(vgic->virqs));
+     *    for (int i = 0; i < ARRAY_SIZE(vgic->vgic_vcpu); i++) {
+     *        vgic_vcpu_t *vgic_vcpu = &(vgic->vgic_vcpu[i]);
+     *        memset(vgic_vcpu->lr_shadow, 0, sizeof(vgic_vcpu->lr_shadow));
+     *        irq_queue_t *q = &vgic_vcpu->irq_queue;
+     *        q->head = 0;
+     *        q->tail = 0;
+     *        memset(q->virqs, 0, sizeof(q->virqs));
+     *    }
+     */
+
+    vgic->dist = calloc(1, sizeof(*(vgic->dist)));
+    if (!vgic->dist) {
+        assert(!"Unable to calloc memory for vgic->dist");
+        return -1;
+    }
+
+    /* The vGIC/vDist device
+     *
+     *    vgic_dist_dev = calloc(1, sizeof(*vgic_dist_dev));
+     *    if (!vgic_dist_dev) {
+     *        assert(!"Unable to calloc memory for vgic_dist_dev");
+     *        return -1;
+     *    }
+     *    *vgic_dist_dev = (typeof(*vgic_dist_dev)) {
+     *        .pstart = paddr_gic_dist,
+     *        .size   = PAGE_SIZE_4K,
+     *        .priv   = vgic
+     *    };
+     */
+
+     vgic->paddr = paddr_gic_dist;
+     the_vgic = vgic;
+
+    /* reserve memory in VM */
+    (void)vm_reserve_memory_at(vm, vgic->paddr, PAGE_SIZE_4K,
+                               handle_vgic_dist_fault, /* cookie = */ vgic);
+
+    vgic_dist_reset(vgic->dist);
+
+    /* Remap VCPU to CPU */
+    vm_memory_reservation_t *vgic_vcpu_reservation = vm_reserve_memory_at(vm, paddr_gic_cpu,
+                                                                          PAGE_SIZE_4K, handle_vgic_vcpu_fault, NULL);
+    int err = vm_map_reservation(vm, vgic_vcpu_reservation, vgic_vcpu_iterator,
+                                 /* cookie = */ vm);
+    if (err) {
+        assert(!"Unable to set up VM reservation");
+        return -1;
+    }
+
+    return 0;
+}
+
