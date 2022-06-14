@@ -1018,6 +1018,11 @@ int vm_register_irq(vm_vcpu_t *vcpu, int irq, irq_ack_fn_t ack_fn, void *cookie)
             if (NULL == *slot) {
                 break;
             }
+            /* interrupts can't be registered twice */
+            if ((*slot)->virq == irq) {
+                ZF_LOGE("IRQ %d already registered\n", irq);
+                return -1;
+            }
         }
         if (NULL == slot) {
             ZF_LOGE("NUM_SLOTS_SPI_VIRQ exceeded, can't register SPI IRQ %d",
