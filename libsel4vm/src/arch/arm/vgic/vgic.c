@@ -484,10 +484,12 @@ static int vgic_vcpu_load_list_reg(vgic_t *vgic, vm_vcpu_t *vcpu, int idx, struc
     assert(vgic_vcpu);
     assert((idx >= 0) && (idx < ARRAY_SIZE(vgic_vcpu->lr_shadow)));
 
-    int err = seL4_ARM_VCPU_InjectIRQ(vcpu->vcpu.cptr, irq->virq, 0, 0, idx);
-    if (err) {
-        ZF_LOGF("Failure loading vGIC list register (error %d)", err);
-        return err;
+    seL4_Error err = seL4_ARM_VCPU_InjectIRQ(vcpu->vcpu.cptr, irq->virq, 0, 0, idx);
+    if (seL4_NoError != err) {
+        ZF_LOGF("Failure loading vGIC list register %d on vCPU %d, error %d",
+                idx, vcpu->vcpu_id, err);
+        /* Return a generic error, the caller doesn't understand seL4 errors. */
+        return -1;
     }
 
     vgic_vcpu->lr_shadow[idx] = irq;
@@ -859,7 +861,10 @@ static memory_fault_result_t handle_vgic_dist_write_fault(vm_t *vm, vm_vcpu_t *v
             irq = CTZ(data);
             data &= ~(1U << irq);
             irq += (offset - GIC_DIST_ISPENDR0) * 8;
-            vgic_dist_set_pending_irq(d, vcpu, irq);
+            /* Set the interrupt as pending. Ignore errors, because there is
+             * nothing we can do here.
+             */
+            (void)vgic_dist_set_pending_irq(d, vcpu, irq);
         }
         break;
     case RANGE32(GIC_DIST_ICPENDR0, GIC_DIST_ICPENDRN):
@@ -1079,7 +1084,7 @@ static vm_frame_t vgic_vcpu_iterator(uintptr_t addr, void *cookie)
 
     int err = vka_cspace_alloc_path(vm->vka, &frame);
     if (err) {
-        printf("Failed to allocate cslot for vgic vcpu\n");
+        ZF_LOGE("Failed to allocate cslot for vgic vcpu");
         return frame_result;
     }
     seL4_Word vka_cookie;
@@ -1087,7 +1092,7 @@ static vm_frame_t vgic_vcpu_iterator(uintptr_t addr, void *cookie)
     if (err) {
         err = simple_get_frame_cap(vm->simple, (void *)GIC_VCPU_PADDR, 12, &frame);
         if (err) {
-            ZF_LOGE("Failed to find device cap for vgic vcpu\n");
+            ZF_LOGE("Failed to find device cap for vgic vcpu");
             return frame_result;
         }
     }
