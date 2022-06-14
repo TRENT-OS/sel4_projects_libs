@@ -233,73 +233,29 @@ static vgic_vcpu_t *get_vgic_vcpu(vgic_t *vgic, int vcpu_id)
     return &(vgic->vgic_vcpu[vcpu_id]);
 }
 
-static struct virq_handle *virq_get_sgi_ppi(vgic_t *vgic, vm_vcpu_t *vcpu, int virq)
+static virq_handle_t virq_find_irq(struct vgic *vgic, vm_vcpu_t *vcpu, int irq)
 {
+    assert(irq >= 0);
+
     vgic_vcpu_t *vgic_vcpu = get_vgic_vcpu(vgic, vcpu->vcpu_id);
     assert(vgic_vcpu);
-    assert((virq >= 0) && (virq < ARRAY_SIZE(vgic_vcpu->local_virqs)));
-    return vgic_vcpu->local_virqs[virq];
-}
 
-static struct virq_handle *virq_find_spi_irq_data(struct vgic *vgic, int virq)
-{
+    /* Check if vCPU local interrupt (SGI, PPI). */
+    if (irq < ARRAY_SIZE(vgic_vcpu->local_virqs)) {
+        return vgic_vcpu->local_virqs[irq];
+    }
+
+    /* Check if global interrupt (SPI). */
     for (int i = 0; i < ARRAY_SIZE(vgic->vspis); i++) {
-        if (vgic->vspis[i] && vgic->vspis[i]->virq == virq) {
+        if (vgic->vspis[i] && vgic->vspis[i]->virq == irq) {
             return vgic->vspis[i];
         }
     }
+
+    /* Invalid interrupt. */
     return NULL;
 }
 
-static struct virq_handle *virq_find_irq_data(struct vgic *vgic, vm_vcpu_t *vcpu, int virq)
-{
-    if (virq < NUM_VCPU_LOCAL_VIRQS)  {
-        return virq_get_sgi_ppi(vgic, vcpu, virq);
-    }
-    return virq_find_spi_irq_data(vgic, virq);
-}
-
-static int virq_spi_add(vgic_t *vgic, struct virq_handle *virq_data)
-{
-    for (int i = 0; i < ARRAY_SIZE(vgic->vspis); i++) {
-        if (vgic->vspis[i] == NULL) {
-            vgic->vspis[i] = virq_data;
-            return 0;
-        }
-    }
-    return -1;
-}
-
-static int virq_sgi_ppi_add(vm_vcpu_t *vcpu, vgic_t *vgic, struct virq_handle *virq_data)
-{
-    vgic_vcpu_t *vgic_vcpu = get_vgic_vcpu(vgic, vcpu->vcpu_id);
-    assert(vgic_vcpu);
-    int irq = virq_data->virq;
-    assert((irq >= 0) && (irq < ARRAY_SIZE(vgic_vcpu->local_virqs)));
-    virq_handle_t *slot = &vgic_vcpu->local_virqs[irq];
-    if (*slot != NULL) {
-        ZF_LOGE("IRQ %d already registered on VCPU %u\n", irq, vcpu->vcpu_id);
-        return -1;
-    }
-    *slot = virq_data;
-    return 0;
-}
-
-static int virq_add(vm_vcpu_t *vcpu, vgic_t *vgic, struct virq_handle *virq_data)
-{
-    int virq = virq_data->virq;
-    if (virq < NUM_VCPU_LOCAL_VIRQS) {
-        return virq_sgi_ppi_add(vcpu, vgic, virq_data);
-    }
-    return virq_spi_add(vgic, virq_data);
-}
-
-static inline void virq_init(virq_handle_t virq, int irq, irq_ack_fn_t ack_fn, void *token)
-{
-    virq->virq = irq;
-    virq->token = token;
-    virq->ack = ack_fn;
-}
 
 static inline struct vgic *vgic_device_get_vgic(struct vgic_dist_device *d)
 {
@@ -555,11 +511,11 @@ static void vgic_dist_enable_irq(struct vgic_dist_device *d, vm_vcpu_t *vcpu, in
     vgic_t *vgic = vgic_device_get_vgic(d);
     DDIST("enabling irq %d\n", irq);
     set_enable(gic_dist, irq, true, vcpu->vcpu_id);
-    struct virq_handle *virq_data = virq_find_irq_data(vgic, vcpu, irq);
-    if (virq_data) {
+    virq_handle_t virq = virq_find_irq(vgic, vcpu, irq);
+    if (virq) {
         /* STATE b) */
-        if (!is_pending(gic_dist, virq_data->virq, vcpu->vcpu_id)) {
-            virq_ack(vcpu, virq_data);
+        if (!is_pending(gic_dist, virq->virq, vcpu->vcpu_id)) {
+            virq_ack(vcpu, virq);
         }
     } else {
         DDIST("enabled irq %d has no handle", irq);
@@ -589,24 +545,24 @@ static int vgic_dist_set_pending_irq(struct vgic_dist_device *d, vm_vcpu_t *vcpu
     struct gic_dist_map *gic_dist = vgic_priv_get_dist(d);
     vgic_t *vgic = vgic_device_get_vgic(d);
 
-    struct virq_handle *virq_data = virq_find_irq_data(vgic, vcpu, irq);
+    virq_handle_t virq = virq_find_irq(vgic, vcpu, irq);
 
-    if (!virq_data || !gic_dist->enable || !is_enabled(gic_dist, irq, vcpu->vcpu_id)) {
+    if (!virq || !gic_dist->enable || !is_enabled(gic_dist, irq, vcpu->vcpu_id)) {
         DDIST("IRQ not enabled (%d) on vcpu %d\n", irq, vcpu->vcpu_id);
         return -1;
     }
 
-    if (is_pending(gic_dist, virq_data->virq, vcpu->vcpu_id)) {
+    if (is_pending(gic_dist, virq->virq, vcpu->vcpu_id)) {
         return 0;
     }
 
     DDIST("Pending set: Inject IRQ from pending set (%d)\n", irq);
-    set_pending(gic_dist, virq_data->virq, true, vcpu->vcpu_id);
+    set_pending(gic_dist, virq->virq, true, vcpu->vcpu_id);
 
     /* Enqueueing an IRQ and dequeueing it right after makes little sense
      * now, but in the future this is needed to support IRQ priorities.
      */
-    int err = vgic_irq_enqueue(vgic, vcpu, virq_data);
+    int err = vgic_irq_enqueue(vgic, vcpu, virq);
     if (err) {
         ZF_LOGF("Failure enqueueing IRQ, increase MAX_IRQ_QUEUE_LEN");
         return -1;
@@ -621,7 +577,7 @@ static int vgic_dist_set_pending_irq(struct vgic_dist_device *d, vm_vcpu_t *vcpu
         return 0;
     }
 
-    struct virq_handle *virq = vgic_irq_dequeue(vgic, vcpu);
+    virq = vgic_irq_dequeue(vgic, vcpu);
     assert(virq);
 
     return vgic_vcpu_load_list_reg(vgic, vcpu, idx, virq);
@@ -1037,22 +993,53 @@ static void vgic_dist_reset(struct vgic_dist_device *d)
 
 int vm_register_irq(vm_vcpu_t *vcpu, int irq, irq_ack_fn_t ack_fn, void *cookie)
 {
+    assert(vcpu);
+    assert(irq >= 0);
+
     struct vgic *vgic = vgic_device_get_vgic(vgic_dist);
     assert(vgic);
+    vgic_vcpu_t *vgic_vcpu = get_vgic_vcpu(vgic, vcpu->vcpu_id);
+    assert(vgic_vcpu);
 
-    struct virq_handle *virq_data = calloc(1, sizeof(*virq_data));
-    if (!virq_data) {
+    virq_handle_t *slot = NULL;
+
+    /* Check if vCPU local interrupt (SGI, PPI). */
+    if (irq < ARRAY_SIZE(vgic_vcpu->local_virqs)) {
+        slot = &vgic_vcpu->local_virqs[irq];
+        if (NULL != *slot) {
+            ZF_LOGE("local SGI/PPI IRQ %d already registered on VCPU %u",
+                    irq, vcpu->vcpu_id);
+            return -1;
+        }
+    } else {
+        /* Find a free slot to register a global interrupt (SPI). */
+        for (int i = 0; i < ARRAY_SIZE(vgic->vspis); i++) {
+            slot = &vgic->vspis[i];
+            if (NULL == *slot) {
+                break;
+            }
+        }
+        if (NULL == slot) {
+            ZF_LOGE("NUM_SLOTS_SPI_VIRQ exceeded, can't register SPI IRQ %d",
+                    irq);
+            return -1;
+        }
+    }
+
+    assert(NULL != slot); /* There must be a valid slot here. */
+    virq_handle_t virq = calloc(1, sizeof(*virq));
+    if (!virq) {
+        ZF_LOGE("virq allocation failed for IRQ %d", irq);
         return -1;
     }
 
-    virq_init(virq_data, irq, ack_fn, cookie);
+    *virq = (typeof(*virq)){
+        .virq  = irq,
+        .token = cookie,
+        .ack  = ack_fn
+    };
 
-    int err = virq_add(vcpu, vgic, virq_data);
-    if (err) {
-        free(virq_data);
-        return -1;
-    }
-
+    *slot = virq;
     return 0;
 }
 
