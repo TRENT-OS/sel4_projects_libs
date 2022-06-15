@@ -81,6 +81,8 @@
 #define GIC_PADDR   0x8000000
 #elif defined(CONFIG_PLAT_ODROIDC2)
 #define GIC_PADDR   0xc4300000
+#elif defined(CONFIG_PLAT_BCM2711)
+#define GIC_PADDR 0x40041000
 #else
 #error "Unsupported platform for GIC"
 #endif
@@ -1101,31 +1103,39 @@ int vm_install_vgic(vm_t *vm)
         assert(!"Unable to calloc memory for VGIC");
         return -1;
     }
+    ZF_LOGD("Add virq to vgic");
     vgic_virq_init(vgic);
 
     /* Distributor */
     vgic_dist = (struct vgic_dist_device *)calloc(1, sizeof(struct vgic_dist_device));
     if (!vgic_dist) {
+	ZF_LOGE("vgic_dist failed to reserve memory");
         return -1;
     }
+    ZF_LOGD("Fill reserved vgic_dist_struct");
     memcpy(vgic_dist, &dev_vgic_dist, sizeof(struct vgic_dist_device));
 
     vgic->dist = calloc(1, sizeof(struct gic_dist_map));
     assert(vgic->dist);
     if (vgic->dist == NULL) {
+	ZF_LOGD("vgic->dist failed Memory reservation");
         return -1;
     }
+    ZF_LOGD("Add vgic to vm memory vspace");
     vm_memory_reservation_t *vgic_dist_res = vm_reserve_memory_at(vm, GIC_DIST_PADDR, PAGE_SIZE_4K,
                                                                   handle_vgic_dist_fault, (void *)vgic_dist);
+    ZF_LOGD("Fill vgic with default values");
     vgic_dist->priv = (void *)vgic;
     vgic_dist_reset(vgic_dist);
 
     /* Remap VCPU to CPU */
+    ZF_LOGD("Remap vgic to cpu");
     vm_memory_reservation_t *vgic_vcpu_reservation = vm_reserve_memory_at(vm, GIC_CPU_PADDR,
                                                                           0x1000, handle_vgic_vcpu_fault, NULL);
     int err = vm_map_reservation(vm, vgic_vcpu_reservation, vgic_vcpu_iterator, (void *)vm);
     if (err) {
         free(vgic_dist->priv);
+	ZF_LOGE("Memory reservation for remap of vgic to cpu was not successfull");
         return -1;
     }
 

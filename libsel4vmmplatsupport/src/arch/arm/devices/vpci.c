@@ -182,6 +182,7 @@ int vm_install_vpci(vm_t *vm, vmm_io_port_list_t *io_port, vmm_pci_space_t *pci)
 
     ps_io_ops_t *ops = vm->io_ops;
     struct pci_cfg_data *cfg_data;
+    printf("vm_install_vpci\n");
     int err = ps_calloc(&ops->malloc_ops, 1, sizeof(struct pci_cfg_data), (void **)&cfg_data);
     if (err) {
         ZF_LOGE("Failed to install VPCI: Failed allocate pci cfg io data");

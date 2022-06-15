@@ -507,6 +507,7 @@ int vm_map_reservation(vm_t *vm, vm_memory_reservation_t *reservation,
         /* We remove the iterator after attempting the mapping (regardless of success or fail)
          * If failed its left to the caller to update the memory map iterator */
         if (err) {
+    		printf("vm_map_reservation() try to map already reserved areas\n");
             ZF_LOGE("Failed to map vm reservation: Error when mapping into VM's vspace");
             return -1;
         }
