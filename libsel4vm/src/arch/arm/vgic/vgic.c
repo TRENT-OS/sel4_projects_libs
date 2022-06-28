@@ -1096,13 +1096,12 @@ static memory_fault_result_t handle_vgic_vcpu_fault(vm_t *vm, vm_vcpu_t *vcpu, u
 static vm_frame_t vgic_vcpu_iterator(uintptr_t addr, void *cookie)
 {
     cspacepath_t frame;
-    vm_frame_t frame_result = { seL4_CapNull, seL4_NoRights, 0, 0 };
     vm_t *vm = (vm_t *)cookie;
 
     int err = vka_cspace_alloc_path(vm->vka, &frame);
     if (err) {
         printf("Failed to allocate cslot for vgic vcpu\n");
-        return frame_result;
+        return (vm_frame_t){ .cptr = seL4_CapNull };
     }
     seL4_Word vka_cookie;
     err = vka_utspace_alloc_at(vm->vka, &frame, kobject_get_type(KOBJECT_FRAME, 12), 12, GIC_VCPU_PADDR, &vka_cookie);
@@ -1110,14 +1109,16 @@ static vm_frame_t vgic_vcpu_iterator(uintptr_t addr, void *cookie)
         err = simple_get_frame_cap(vm->simple, (void *)GIC_VCPU_PADDR, 12, &frame);
         if (err) {
             ZF_LOGE("Failed to find device cap for vgic vcpu\n");
-            return frame_result;
+            return (vm_frame_t){ .cptr = seL4_CapNull };
         }
     }
-    frame_result.cptr = frame.capPtr;
-    frame_result.rights = seL4_AllRights;
-    frame_result.vaddr = GIC_CPU_PADDR;
-    frame_result.size_bits = seL4_PageBits;
-    return frame_result;
+
+    return (vm_frame_t){
+        .cptr      = frame.capPtr,
+        .rights    = seL4_AllRights,
+        .vaddr     = GIC_CPU_PADDR,
+        .size_bits = seL4_PageBits
+    };
 }
 
 /*
