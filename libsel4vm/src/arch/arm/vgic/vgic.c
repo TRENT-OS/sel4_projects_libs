@@ -1098,20 +1098,30 @@ static vm_frame_t vgic_vcpu_iterator(uintptr_t addr, void *cookie)
     cspacepath_t frame;
     vm_t *vm = (vm_t *)cookie;
 
+    ZF_LOGD("addr %p", (void*)addr);
+
     int err = vka_cspace_alloc_path(vm->vka, &frame);
     if (err) {
         printf("Failed to allocate cslot for vgic vcpu\n");
         return (vm_frame_t){ .cptr = seL4_CapNull };
     }
+
+    /* Allocate the page at GIC_VCPU_PADDR into a kernel object */
     seL4_Word vka_cookie;
     err = vka_utspace_alloc_at(vm->vka, &frame, kobject_get_type(KOBJECT_FRAME, 12), 12, GIC_VCPU_PADDR, &vka_cookie);
-    if (err) {
+    if (!err) {
+        ZF_LOGE("vka_utspace_alloc_at() success for GIC_VCPU_PADDR %p", GIC_VCPU_PADDR);
+    } else {
+        /* Allocate a page at GIC_VCPU_PADDR */
         err = simple_get_frame_cap(vm->simple, (void *)GIC_VCPU_PADDR, 12, &frame);
         if (err) {
             ZF_LOGE("Failed to find device cap for vgic vcpu\n");
             return (vm_frame_t){ .cptr = seL4_CapNull };
         }
+        ZF_LOGE("simple_get_frame_cap() success for GIC_VCPU_PADDR %p", GIC_VCPU_PADDR);
     }
+
+    ZF_LOGD("return frame at %x", GIC_CPU_PADDR);
 
     return (vm_frame_t){
         .cptr      = frame.capPtr,
@@ -1146,15 +1156,23 @@ int vm_install_vgic(vm_t *vm)
     if (vgic->dist == NULL) {
         return -1;
     }
-    vm_memory_reservation_t *vgic_dist_res = vm_reserve_memory_at(vm, GIC_DIST_PADDR, PAGE_SIZE_4K,
-                                                                  handle_vgic_dist_fault, (void *)vgic_dist);
     vgic_dist->priv = (void *)vgic;
     vgic_dist_reset(vgic_dist);
 
+    /* install virtual peripheral at GIC_DIST_PADDR */
+    (void)vm_reserve_memory_at(vm, GIC_DIST_PADDR, PAGE_SIZE_4K,
+                               handle_vgic_dist_fault, (void *)vgic_dist);
+
+    /* install virtual peripheral at GIC_CPU_PADDR */
     /* Remap VCPU to CPU */
-    vm_memory_reservation_t *vgic_vcpu_reservation = vm_reserve_memory_at(vm, GIC_CPU_PADDR,
-                                                                          0x1000, handle_vgic_vcpu_fault, NULL);
-    int err = vm_map_reservation(vm, vgic_vcpu_reservation, vgic_vcpu_iterator, (void *)vm);
+    vm_memory_reservation_t *r = vm_reserve_memory_at(vm, GIC_CPU_PADDR, PAGE_SIZE_4K,
+                                                      handle_vgic_vcpu_fault, NULL);
+    /*
+        r->memory_map_iterator = vgic_vcpu_iterator;
+        r->memory_iterator_cookie = NULL;
+        err = map_vm_memory_reservation(vm, r, vgic_vcpu_iterator, NULL);
+    */
+    int err = vm_map_reservation(vm, r, vgic_vcpu_iterator, (void *)vm);
     if (err) {
         free(vgic_dist->priv);
         return -1;
