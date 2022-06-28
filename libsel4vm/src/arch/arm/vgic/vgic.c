@@ -827,6 +827,7 @@ static memory_fault_result_t handle_vgic_dist_write_fault(vm_t *vm, vm_vcpu_t *v
     uint32_t reg = 0;
     uint32_t mask = fault_get_data_mask(fault);
     uint32_t reg_offset = 0;
+    unsigned int irq_base;
     uint32_t data;
     switch (offset) {
     case RANGE32(GIC_DIST_CTLR, GIC_DIST_CTLR):
@@ -860,51 +861,39 @@ static memory_fault_result_t handle_vgic_dist_write_fault(vm_t *vm, vm_vcpu_t *v
         gic_dist->irq_group[reg_offset] = fault_emulate(fault, gic_dist->irq_group[reg_offset]);
         break;
     case RANGE32(GIC_DIST_ISENABLER0, GIC_DIST_ISENABLERN):
-        data = fault_get_data(fault);
-        /* Mask the data to write */
-        data &= mask;
+        irq_base = (offset - GIC_DIST_ISENABLER0) * 8;
+        data = fault_get_data(fault) & mask;
         while (data) {
-            int irq;
-            irq = CTZ(data);
-            data &= ~(1U << irq);
-            irq += (offset - GIC_DIST_ISENABLER0) * 8;
-            vgic_dist_enable_irq(d, vcpu, irq);
+            unsigned int bit = CTZ(data);
+            data &= ~(1U << bit);
+            vgic_dist_enable_irq(d, vcpu, irq_base + bit);
         }
         break;
     case RANGE32(GIC_DIST_ICENABLER0, GIC_DIST_ICENABLERN):
-        data = fault_get_data(fault);
-        /* Mask the data to write */
-        data &= mask;
+        irq_base = (offset - GIC_DIST_ICENABLER0) * 8;
+        data = fault_get_data(fault) & mask;
         while (data) {
-            int irq;
-            irq = CTZ(data);
-            data &= ~(1U << irq);
-            irq += (offset - GIC_DIST_ICENABLER0) * 8;
-            vgic_dist_disable_irq(d, vcpu, irq);
+            unsigned int bit = CTZ(data);
+            data &= ~(1U << bit);
+            vgic_dist_disable_irq(d, vcpu, irq_base + bit);
         }
         break;
     case RANGE32(GIC_DIST_ISPENDR0, GIC_DIST_ISPENDRN):
-        data = fault_get_data(fault);
-        /* Mask the data to write */
-        data &= mask;
+        irq_base = (offset - GIC_DIST_ISPENDR0) * 8;
+        data = fault_get_data(fault) & mask;
         while (data) {
-            int irq;
-            irq = CTZ(data);
-            data &= ~(1U << irq);
-            irq += (offset - GIC_DIST_ISPENDR0) * 8;
-            vgic_dist_set_pending_irq(d, vcpu, irq);
+            unsigned int bit = CTZ(data);
+            data &= ~(1U << bit);
+            vgic_dist_set_pending_irq(d, vcpu, irq_base + bit);
         }
         break;
     case RANGE32(GIC_DIST_ICPENDR0, GIC_DIST_ICPENDRN):
-        data = fault_get_data(fault);
-        /* Mask the data to write */
-        data &= mask;
+        irq_base = (offset - GIC_DIST_ICPENDR0) * 8;
+        data = fault_get_data(fault) & mask;
         while (data) {
-            int irq;
-            irq = CTZ(data);
-            data &= ~(1U << irq);
-            irq += (offset - GIC_DIST_ICPENDR0) * 8;
-            vgic_dist_clr_pending_irq(d, vcpu, irq);
+            unsigned int bit = CTZ(data);
+            data &= ~(1U << bit);
+            vgic_dist_clr_pending_irq(d, vcpu, irq_base + bit);
         }
         break;
     case RANGE32(GIC_DIST_ISACTIVER0, GIC_DIST_ISACTIVER0):
