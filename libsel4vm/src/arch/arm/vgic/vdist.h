@@ -486,7 +486,10 @@ static memory_fault_result_t vgic_dist_reg_write(vm_t *vm, vm_vcpu_t *vcpu,
             irq = CTZ(data);
             data &= ~(1U << irq);
             irq += (offset - GIC_DIST_ISPENDR0) * 8;
-            vgic_dist_set_pending_irq(vgic, vcpu, irq);
+            /* Set the interrupt as pending. Ignore errors, because there is
+             * nothing we can do here.
+             */
+            (void)vgic_dist_set_pending_irq(vgic, vcpu, irq);
         }
         break;
     case RANGE32(GIC_DIST_ICPENDR0, GIC_DIST_ICPENDRN):
