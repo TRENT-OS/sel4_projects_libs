@@ -15,6 +15,9 @@ int vmm_handle_arm_vcpu_exception(vm_vcpu_t *vcpu, uint32_t hsr, void *cookie)
 {
     uint32_t ec_class = HSR_EXCEPTION_CLASS(hsr);
     vcpu_exception_handler_fn exception_handler = vcpu_exception_handlers[ec_class];
+
+    printf("vmm_handle_arm_vcpu_exception vcpu=%p, ec=%x\n", vcpu, ec_class);
+
     if (!exception_handler) {
         ZF_LOGE("Unknown VCPU HSR Exception Class: No registered handler");
         return -1;

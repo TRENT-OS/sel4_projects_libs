@@ -100,6 +100,7 @@ int vm_get_thread_context_reg(vm_vcpu_t *vcpu, unsigned int reg, uintptr_t *valu
 int vm_set_arm_vcpu_reg(vm_vcpu_t *vcpu, seL4_Word reg, uintptr_t value)
 {
     int err = seL4_ARM_VCPU_WriteRegs(vcpu->vcpu.cptr, reg, value);
+    ZF_LOGE("vm_set_arm_vcpu_reg vcpu=%p, reg=%d, v=%x", vcpu, reg, value);
     if (err) {
         ZF_LOGE("Failed to set VCPU register: Write registers failed");
         return -1;

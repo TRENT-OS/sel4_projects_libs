@@ -46,6 +46,17 @@ static int vm_decode_exit(seL4_Word label)
 {
     int exit_reason = VM_UNKNOWN_EXIT;
 
+    static char* exit_reason_names[] = {
+      [VM_GUEST_ABORT_EXIT] = "GUEST_ABORT",
+      [VM_SYSCALL_EXIT] = "SYSCALL",
+      [VM_USER_EXCEPTION_EXIT]   ="USER_EXCEPTION",
+      [VM_VGIC_MAINTENANCE_EXIT] ="VGIC_MAINTENANCE",
+      [VM_VCPU_EXIT]      = "VCPU",
+      [VM_UNKNOWN_EXIT]   = "UNKNOWN",
+      [VM_VPPI_EXIT]      = "VPPI",
+    };
+
+
     switch (label) {
     case seL4_Fault_VMFault:
         exit_reason = VM_GUEST_ABORT_EXIT;
@@ -68,6 +79,9 @@ static int vm_decode_exit(seL4_Word label)
     default:
         exit_reason = VM_UNKNOWN_EXIT;
     }
+
+    ZF_LOGE("vm_decode_exit label=%x, reason=%x %s", label, exit_reason, exit_reason_names[exit_reason]);
+
     return exit_reason;
 }
 
@@ -81,12 +95,14 @@ static int vm_vppi_event_handler(vm_vcpu_t *vcpu)
     err = vm_inject_irq(vcpu, ppi_irq);
     if (err) {
         ZF_LOGE("VPPI IRQ %"SEL4_PRId_word" dropped on vcpu %d", ppi_irq, vcpu->vcpu_id);
+#if 0
         /* Acknowledge to unmask it as our guest will not use the interrupt */
         seL4_Error ack_err = seL4_ARM_VCPU_AckVPPI(vcpu->vcpu.cptr, ppi_irq);
         if (ack_err) {
             ZF_LOGE("Failed to ACK VPPI: VPPI Ack invocation failed");
             return -1;
         }
+#endif
     }
     seL4_MessageInfo_t reply;
     reply = seL4_MessageInfo_new(0, 0, 0, 0);
@@ -131,6 +147,7 @@ static int vm_vcpu_handler(vm_vcpu_t *vcpu)
     fault_t *fault;
     fault = vcpu->vcpu_arch.fault;
     hsr = seL4_GetMR(seL4_UnknownSyscall_ARG0);
+    ZF_LOGE("vm_cpu_handler vcpu=%p", vcpu);
     if (vcpu->vcpu_arch.unhandled_vcpu_callback) {
         /* Pass the vcpu fault to library user in case they can handle it */
         err = new_vcpu_fault(fault, hsr);
@@ -167,6 +184,8 @@ int vcpu_start(vm_vcpu_t *vcpu)
     vcpu->vcpu_online = true;
     seL4_Word vmpidr_val;
     seL4_Word vmpidr_reg;
+
+    ZF_LOGE("vcpu_start, id=%d", vcpu->vcpu_id);
 
 #if CONFIG_MAX_NUM_NODES > 1
 #ifdef CONFIG_ARCH_AARCH64
@@ -214,8 +233,12 @@ int vm_run_arch(vm_t *vm)
 {
     int err;
     int ret;
+    seL4_UserContext context;
+    const int num_regs = sizeof(context) / sizeof(seL4_Word);
 
     ret = 1;
+
+    ZF_LOGE("vm_run_arch vm=%p", vm);
     /* Loop, handling events */
     while (ret > 0) {
         seL4_MessageInfo_t tag;
@@ -223,8 +246,14 @@ int vm_run_arch(vm_t *vm)
         seL4_Word label;
         int vm_exit_reason;
 
+
+        ZF_LOGE("vm_run_arch wait for recv");
         tag = seL4_Recv(vm->host_endpoint, &sender_badge);
         label = seL4_MessageInfo_get_label(tag);
+        ZF_LOGE("vm_run_arch received tag=%d, label=%d", tag, label);
+
+
+
         if (sender_badge >= MIN_VCPU_BADGE && sender_badge <= MAX_VCPU_BADGE) {
             seL4_Word vcpu_idx = VCPU_BADGE_IDX(sender_badge);
             if (vcpu_idx >= vm->num_vcpus) {
@@ -232,6 +261,17 @@ int vm_run_arch(vm_t *vm)
                 ret = -1;
             } else {
                 vm_exit_reason = vm_decode_exit(label);
+                ZF_LOGE("vm_exit_reason=%d", vm_exit_reason);
+
+
+                // err = seL4_TCB_ReadRegisters(tcb, false, 0, num_regs, &context);
+                // if (err) {
+                //     ZF_LOGE("Failed to read registers for tcb 0x%lx, error %d", (long) tcb, err);
+                //     return;
+                // }
+                // ZF_LOGE("vm_run_arch pc=%x\n", context.pc);
+
+
                 ret = arm_exit_handlers[vm_exit_reason](vm->vcpus[vcpu_idx]);
                 if (ret == VM_EXIT_HANDLE_ERROR) {
                     vm->run.exit_reason = VM_GUEST_ERROR_EXIT;
@@ -239,6 +279,7 @@ int vm_run_arch(vm_t *vm)
             }
         } else {
             if (vm->run.notification_callback) {
+                ZF_LOGE("vm_run_arch callback=%p", vm->run.notification_callback);
                 err = vm->run.notification_callback(vm, sender_badge, tag,
                                                     vm->run.notification_callback_cookie);
             } else {

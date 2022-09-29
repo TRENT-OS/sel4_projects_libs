@@ -147,6 +147,8 @@ static int add_memory_reservation_node(vm_t *vm, uintptr_t addr, size_t size, re
     res_tree *result_node;
     ps_io_ops_t *ops = vm->io_ops;
     vm_memory_reservation_cookie_t *res_cookie = vm->mem.reservation_cookie;
+
+    ZF_LOGE("add_memory_reservation_node addr=%x, size=%x, data=%p\n", addr, size, data);
     if (!res_cookie) {
         ZF_LOGE("Failed to find memory reservation: VM memory backend not initialised");
         return -1;
@@ -269,6 +271,10 @@ memory_fault_result_t vm_memory_handle_fault(vm_t *vm, vm_vcpu_t *vcpu, uintptr_
     int err;
     res_tree *reservation_node = find_memory_reservation_by_addr(vm, addr);
     vm_memory_reservation_t *fault_reservation;
+
+    /* adhoc declaration */
+    seL4_Word get_vcpu_fault_ip(vm_vcpu_t *vcpu);
+    ZF_LOGE("vm_memory_handle_fault pc=%x, addr=%x\n", get_vcpu_fault_ip(vcpu),addr);
 
     if (!reservation_node) {
         ZF_LOGW("Unable to find reservation for addr: 0x%x, memory fault left unhandled", addr);

@@ -78,6 +78,8 @@ vm_vcpu_t *vm_create_vcpu(vm_t *vm, int priority)
     assert(!err);
     vm->vcpus[vm->num_vcpus] = vcpu_new;
     vm->num_vcpus++;
+
+    ZF_LOGE("vm_create_vcpu vm=%p, vcpu=%p num_vcpus=%d", vm, vcpu_new, vm->num_vcpus);
     return vcpu_new;
 }
 

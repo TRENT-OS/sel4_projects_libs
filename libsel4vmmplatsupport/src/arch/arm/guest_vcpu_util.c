@@ -25,6 +25,7 @@
 
 static void vppi_event_ack(vm_vcpu_t *vcpu, int irq, void *cookie)
 {
+    printf("vppi_event_ack vcpu=%p, irq=%d\n", vcpu, irq);
     seL4_Error err = seL4_ARM_VCPU_AckVPPI(vcpu->vcpu.cptr, (seL4_Word)irq);
     if (err) {
         ZF_LOGE("Failed to ACK VPPI: VCPU VPPIAck invocation failed");

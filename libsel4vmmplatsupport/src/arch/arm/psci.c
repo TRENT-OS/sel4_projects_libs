@@ -54,6 +54,10 @@ int handle_psci(vm_vcpu_t *vcpu, seL4_Word fn_number, bool convention)
         uintptr_t entry_point_address = smc_get_arg(&regs, 2);
         uintptr_t context_id = smc_get_arg(&regs, 3);
         vm_vcpu_t *target_vcpu = vm_vcpu_for_target_cpu(vcpu->vm, target_cpu);
+#if 1
+        ZF_LOGE("PSCI CPU_ON: not supported\n");
+        smc_set_return_value(&regs, PSCI_NOT_SUPPORTED);
+#else
         if (target_vcpu == NULL) {
             target_vcpu = vm_find_free_unassigned_vcpu(vcpu->vm);
             if (target_vcpu && start_new_vcpu(target_vcpu, entry_point_address, context_id, target_cpu) == 0) {
@@ -68,7 +72,7 @@ int handle_psci(vm_vcpu_t *vcpu, seL4_Word fn_number, bool convention)
                 smc_set_return_value(&regs, PSCI_INTERNAL_FAILURE);
             }
         }
-
+#endif
         break;
     }
     case PSCI_MIGRATE_INFO_TYPE:
