@@ -91,23 +91,6 @@ static bool is_initrd(void const *buffer)
     return (hdr->magic == INITRD_GZ_MAGIC);
 }
 
-static enum img_type image_get_type(void const *buffer)
-{
-    if (0 == elf_check_magic(buffer)) {
-        return IMG_ELF;
-    } else if (is_zImage(buffer)) {
-        return IMG_ZIMAGE;
-    } else if (is_uImage(buffer)) {
-        return IMG_UIMAGE;
-    } else if (is_dtb(buffer)) {
-        return IMG_DTB;
-    } else if (is_initrd(buffer)) {
-        return IMG_INITRD_GZ;
-    } else {
-        return IMG_BIN;
-    }
-}
-
 static int get_guest_image_type(const char *image_name, enum img_type *image_type, generic_hdr_t *header)
 {
     int fd = open(image_name, 0);
@@ -124,7 +107,13 @@ static int get_guest_image_type(const char *image_name, enum img_type *image_typ
         return -1;
     }
 
-    *image_type = image_get_type(header);
+    *image_type = (elf_check_magic((void*)header) == 0) ? IMG_ELF
+                  : (is_zImage((void*)header)) ? IMG_ZIMAGE
+                  : (is_uImage((void*)header)) ? IMG_UIMAGE
+                  : (is_dtb((void*)header)) ? IMG_DTB
+                  : (is_initrd((void*)header)) ? IMG_INITRD_GZ
+                  : IMG_BIN;
+
     return 0;
 }
 
