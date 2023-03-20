@@ -26,7 +26,11 @@
 #define DTB_MAGIC    0xedfe0dd0
 #define INITRD_GZ_MAGIC 0x8b1f
 
-struct dtb_hdr {
+typedef struct {
+    uint32_t magic;
+} uimg_hdr_t;
+
+typedef struct {
     uint32_t magic;
 #if 0
     uint32_t size;
@@ -39,67 +43,72 @@ struct dtb_hdr {
     uint32_t size_dt_strings;
     uint32_t size_dt_struct;
 #endif
-};
+} dtb_hdr_t;
 
-struct initrd_gz_hdr {
+typedef struct {
     uint16_t magic;
     uint8_t compression;
     uint8_t flags;
-};
+} initrd_gz_hdr_t;
 
-struct zimage_hdr {
+typedef struct {
     uint32_t code[9];
     uint32_t magic;
     uint32_t start;
     uint32_t end;
-};
+} zimage_hdr_t;
 
-static int is_uImage(void *file)
+typedef union {
+    uimg_hdr_t uimg_hdr;
+    dtb_hdr_t dtb_hdr;
+    initrd_gz_hdr_t initrd_gz_hdr;
+    zimage_hdr_t zimage_hdr;
+    Elf64_Ehdr *header;
+} generic_hdr_t;
+
+static bool is_uImage(void const *buffer)
 {
-    uint32_t magic = UIMAGE_MAGIC;
-    return memcmp(file, &magic, sizeof(magic));
+    uimg_hdr_t const *hdr = (uimg_hdr_t const*)buffer;
+    return (hdr->magic == UIMAGE_MAGIC);
 }
 
-static int is_zImage(void *file)
+static bool is_zImage(void const *buffer)
 {
-    struct zimage_hdr *hdr;
-    hdr = (struct zimage_hdr *)file;
-    return hdr->magic != ZIMAGE_MAGIC;
+    zimage_hdr_t const *hdr = (zimage_hdr_t const *)buffer;
+    return (hdr->magic == ZIMAGE_MAGIC);
 }
 
-static int is_dtb(void *file)
+static bool is_dtb(void const *buffer)
 {
-    struct dtb_hdr *hdr;
-    hdr = (struct dtb_hdr *)file;
-    return hdr->magic != DTB_MAGIC;
+    dtb_hdr_t const *hdr = (dtb_hdr_t const *)buffer;
+    return (hdr->magic == DTB_MAGIC);
 }
 
-static int is_initrd(void *file)
+static bool is_initrd(void const *buffer)
 {
+    initrd_gz_hdr_t const *hdr = (initrd_gz_hdr_t const *)buffer;
     /* We currently only support initrd files in the gzip format */
-    struct initrd_gz_hdr *hdr;
-    hdr = (struct initrd_gz_hdr *)file;
-    return hdr->magic != INITRD_GZ_MAGIC;
+    return (hdr->magic == INITRD_GZ_MAGIC);
 }
 
-static enum img_type image_get_type(void *file)
+static enum img_type image_get_type(void const *buffer)
 {
-    if (elf_check_magic(file) == 0) {
+    if (0 == elf_check_magic(buffer)) {
         return IMG_ELF;
-    } else if (is_zImage(file) == 0) {
+    } else if (is_zImage(buffer)) {
         return IMG_ZIMAGE;
-    } else if (is_uImage(file) == 0) {
+    } else if (is_uImage(buffer)) {
         return IMG_UIMAGE;
-    } else if (is_dtb(file) == 0) {
+    } else if (is_dtb(buffer)) {
         return IMG_DTB;
-    } else if (is_initrd(file) == 0) {
+    } else if (is_initrd(buffer)) {
         return IMG_INITRD_GZ;
     } else {
         return IMG_BIN;
     }
 }
 
-static int get_guest_image_type(const char *image_name, enum img_type *image_type, Elf64_Ehdr *header)
+static int get_guest_image_type(const char *image_name, enum img_type *image_type, generic_hdr_t *header)
 {
     int fd = open(image_name, 0);
     if (fd == -1) {
@@ -181,7 +190,7 @@ static uintptr_t load_guest_kernel_image(vm_t *vm, const char *kernel_image_name
     int err;
     uintptr_t load_addr;
     enum img_type ret_file_type;
-    Elf64_Ehdr header = {0};
+    generic_hdr_t header = {0};
     err = get_guest_image_type(kernel_image_name, &ret_file_type, &header);
     if (err) {
         return 0;
@@ -193,7 +202,7 @@ static uintptr_t load_guest_kernel_image(vm_t *vm, const char *kernel_image_name
         break;
     case IMG_ZIMAGE:
         /* zImage is used for 32-bit Linux kernels only. */
-        load_addr = ((struct zimage_hdr *)(&header))->start;
+        load_addr = ((zimage_hdr_t *)(&header))->start;
         if (0 == load_addr) {
             load_addr = vm->entry;
         }
@@ -214,7 +223,7 @@ static uintptr_t load_guest_module_image(vm_t *vm, const char *image_name, uintp
     int err;
     uintptr_t load_addr;
     enum img_type ret_file_type;
-    Elf64_Ehdr header = {0};
+    generic_hdr_t header = {0};
     err = get_guest_image_type(image_name, &ret_file_type, &header);
     if (err) {
         return 0;
