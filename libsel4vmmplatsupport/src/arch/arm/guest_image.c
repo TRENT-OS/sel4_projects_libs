@@ -173,18 +173,24 @@ static int load_image(vm_t *vm, const char *image_name, uintptr_t load_addr, siz
     return 0;
 }
 
-static uintptr_t load_guest_kernel_image(vm_t *vm, const char *kernel_image_name, uintptr_t load_base_addr,
-                                         size_t *image_size)
+int vm_load_guest_kernel(vm_t *vm, const char *kernel_name, uintptr_t load_address, size_t alignment,
+                         guest_kernel_image_t *guest_kernel_image)
 {
     int err;
+
+    if (!guest_kernel_image) {
+        ZF_LOGE("Invalid guest_image_t object");
+        return -1;
+    }
+
+    /* Determine the load address */
     uintptr_t load_addr;
     enum img_type ret_file_type;
     generic_hdr_t header = {0};
-    err = get_guest_image_type(kernel_image_name, &ret_file_type, &header);
+    err = get_guest_image_type(kernel_name, &ret_file_type, &header);
     if (err) {
-        return 0;
+        return -1;
     }
-    /* Determine the load address */
     switch (ret_file_type) {
     case IMG_BIN:
         load_addr = vm->entry;
@@ -198,77 +204,55 @@ static uintptr_t load_guest_kernel_image(vm_t *vm, const char *kernel_image_name
         break;
     default:
         ZF_LOGE("Error: Unknown kernel image format for '%s'", kernel_image_name);
-        return 0;
-    }
-    err = load_image(vm, kernel_image_name, load_addr, image_size);
-    if (err) {
-        return 0;
-    }
-    return load_addr;
-}
-
-static uintptr_t load_guest_module_image(vm_t *vm, const char *image_name, uintptr_t load_base_addr, size_t *image_size)
-{
-    int err;
-    uintptr_t load_addr;
-    enum img_type ret_file_type;
-    generic_hdr_t header = {0};
-    err = get_guest_image_type(image_name, &ret_file_type, &header);
-    if (err) {
-        return 0;
-    }
-    /* Determine the load address */
-    switch (ret_file_type) {
-    case IMG_DTB:
-    case IMG_INITRD_GZ:
-        load_addr = load_base_addr;
-        break;
-    default:
-        ZF_LOGE("Error: Unknown module image format for '%s'", image_name);
-        return 0;
-    }
-    err = load_image(vm, image_name, load_addr, image_size);
-    if (err) {
-        return 0;
-    }
-    return load_addr;
-}
-
-int vm_load_guest_kernel(vm_t *vm, const char *kernel_name, uintptr_t load_address, size_t alignment,
-                         guest_kernel_image_t *guest_kernel_image)
-{
-    uintptr_t load_addr;
-    size_t kernel_len;
-    if (!guest_kernel_image) {
-        ZF_LOGE("Invalid guest_image_t object");
         return -1;
     }
-    load_addr = load_guest_kernel_image(vm, kernel_name, load_address, &kernel_len);
-    if (0 == load_addr) {
+
+    size_t len = 0;
+    err = load_image(vm, kernel_name, load_addr, &len);
+    if (err) {
         return -1;
     }
+
     guest_kernel_image->kernel_image.load_paddr = load_addr;
-    guest_kernel_image->kernel_image.size = kernel_len;
+    guest_kernel_image->kernel_image.size = len;
     return 0;
 }
 
 int vm_load_guest_module(vm_t *vm, const char *module_name, uintptr_t load_address, size_t alignment,
                          guest_image_t *guest_image)
 {
-    uintptr_t load_addr;
-    size_t module_len;
+    int err;
 
     if (!guest_image) {
         ZF_LOGE("Invalid guest_image_t object");
         return -1;
     }
 
-    load_addr = load_guest_module_image(vm, module_name, load_address, &module_len);
-    if (0 == load_addr) {
-        return -1;
+    /* Determine the load address */
+    uintptr_t load_addr;
+    generic_hdr_t header = {0};
+    enum img_type ret_file_type;
+    err = get_guest_image_type(module_name, &ret_file_type, &header);
+    if (err) {
+        return 0;
+    }
+    switch (ret_file_type) {
+    case IMG_DTB:
+    case IMG_INITRD_GZ:
+        load_addr = load_address;
+        break;
+    default:
+        ZF_LOGE("Error: Unknown module image format for '%s'", image_name);
+        return 0;
+    }
+
+    size_t len = 0;
+    err = load_image(vm, module_name, load_addr, &len);
+    if (err) {
+        return 0;
     }
 
     guest_image->load_paddr = load_addr;
-    guest_image->size = module_len;
+    guest_image->size = len;
     return 0;
 }
