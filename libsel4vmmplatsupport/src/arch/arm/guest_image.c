@@ -149,7 +149,7 @@ static int guest_write_address(vm_t *vm, uintptr_t paddr, void *vaddr, size_t si
     return 0;
 }
 
-static int load_image(vm_t *vm, const char *image_name, uintptr_t load_addr,  size_t *resulting_image_size)
+static int load_image(vm_t *vm, const char *image_name, uintptr_t load_addr, size_t *resulting_image_size)
 {
     int fd;
     int error;
