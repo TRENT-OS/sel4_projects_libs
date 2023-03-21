@@ -91,32 +91,6 @@ static bool is_initrd(void const *buffer)
     return (hdr->magic == INITRD_GZ_MAGIC);
 }
 
-static int get_guest_image_type(const char *image_name, enum img_type *image_type, generic_hdr_t *header)
-{
-    int fd = open(image_name, 0);
-    if (fd == -1) {
-        ZF_LOGE("Error: Unable to open image \'%s\'", image_name);
-        return -1;
-    }
-
-    size_t len = read(fd, header, sizeof(*header));
-    close(fd);
-
-    if (len != sizeof(*header)) {
-        ZF_LOGE("Could not read len. File is likely corrupt");
-        return -1;
-    }
-
-    *image_type = (elf_check_magic((void*)header) == 0) ? IMG_ELF
-                  : (is_zImage((void*)header)) ? IMG_ZIMAGE
-                  : (is_uImage((void*)header)) ? IMG_UIMAGE
-                  : (is_dtb((void*)header)) ? IMG_DTB
-                  : (is_initrd((void*)header)) ? IMG_INITRD_GZ
-                  : IMG_BIN;
-
-    return 0;
-}
-
 static int guest_write_address(vm_t *vm, uintptr_t paddr, void *vaddr, size_t size, size_t offset, void *cookie)
 {
     int fd = *((int *)cookie);
@@ -141,118 +115,120 @@ static int guest_write_address(vm_t *vm, uintptr_t paddr, void *vaddr, size_t si
     return 0;
 }
 
-static int load_image(vm_t *vm, const char *image_name, uintptr_t load_addr, size_t *resulting_image_size)
+static int vm_load_image(vm_t *vm, const char *name, bool is_kernel,
+                         uintptr_t load_addr, guest_image_t *image)
 {
-    int fd;
-    int error;
+    assert(image);
 
-    fd = open(image_name, 0);
+    int err;
+
+    int fd = open(name, 0);
     if (fd == -1) {
-        ZF_LOGE("Error: Unable to find image \'%s\'", image_name);
+        ZF_LOGE("Error: Unable to open image '%s'", name);
         return -1;
     }
 
     size_t file_size = lseek(fd, 0, SEEK_END);
     lseek(fd, 0, SEEK_SET);
 
-    if (0 == file_size) {
-        ZF_LOGE("Error: \'%s\' has zero size", image_name);
-        return -1;
-    }
+    generic_hdr_t header = {0};
+    size_t len = read(fd, &header, sizeof(header));
 
-    vm_ram_mark_allocated(vm, load_addr, ROUND_UP(file_size, PAGE_SIZE_4K));
-    error = vm_ram_touch(vm, load_addr, file_size, guest_write_address, (void *)&fd);
-    if (error) {
-        ZF_LOGE("Error: Failed to load \'%s\'", image_name);
+    if (len != sizeof(header)) {
+        ZF_LOGE("Could not read len. File is likely corrupt");
         close(fd);
         return -1;
     }
 
-    *resulting_image_size = file_size;
+    if (0 == elf_check_magic((void*)&header)) {
+        /* so far, this is unsupported */
+        ZF_LOGE("Error: ELF format is unsupported");
+        close(fd);
+        return -1;
+
+    } else if (is_zImage((void*)&header)) {
+        if (!is_kernel) {
+            ZF_LOGE("Error: zImage format is supported for kernel only");
+            close(fd);
+            return -1;
+        }
+        /* zImage is used for 32-bit Linux kernels only. */
+        uintptr_t start = header.zimage_hdr.start;
+        if (start != 0) {
+            load_addr = start;
+        }
+
+    } else if (is_uImage((void*)&header)) {
+        /* so far, this is unsupported */
+        ZF_LOGE("Error: uImage ELF format is unsupported");
+        return -1; /* unsupported */
+
+    } else if (is_dtb((void*)&header)) {
+        if (is_kernel) {
+            ZF_LOGE("Error: DTB file is no valis kernel");
+            close(fd);
+            return -1;
+        }
+
+    } else if (is_initrd((void*)&header)) {
+        if (is_kernel) {
+            close(fd);
+            return -1;
+        }
+
+    } else {
+        /* binary */
+    }
+
+    lseek(fd, 0, SEEK_SET);
+    vm_ram_mark_allocated(vm, load_addr, ROUND_UP(file_size, PAGE_SIZE_4K));
+    err = vm_ram_touch(vm, load_addr, file_size, guest_write_address, (void *)&fd);
     close(fd);
+    if (err) {
+        ZF_LOGE("Error: Failed to load '%s' (%d)", name, err);
+        close(fd);
+        return -1;
+    }
+
+    image->load_paddr = load_addr;
+    image->size = file_size;
     return 0;
 }
 
-int vm_load_guest_kernel(vm_t *vm, const char *kernel_name, uintptr_t load_address, size_t alignment,
+
+int vm_load_guest_kernel(vm_t *vm, const char *kernel_name,
+                         uintptr_t load_address, size_t alignment,
                          guest_kernel_image_t *guest_kernel_image)
 {
-    int err;
-
     if (!guest_kernel_image) {
-        ZF_LOGE("Invalid guest_image_t object");
+        ZF_LOGE("Invalid guest_kernel_image object");
         return -1;
     }
 
-    /* Determine the load address */
-    uintptr_t load_addr;
-    enum img_type ret_file_type;
-    generic_hdr_t header = {0};
-    err = get_guest_image_type(kernel_name, &ret_file_type, &header);
+    int err = vm_load_image(vm, kernel_name, true, load_address,
+                            &(guest_kernel_image->kernel_image));
     if (err) {
-        return -1;
-    }
-    switch (ret_file_type) {
-    case IMG_BIN:
-        load_addr = vm->entry;
-        break;
-    case IMG_ZIMAGE:
-        /* zImage is used for 32-bit Linux kernels only. */
-        load_addr = ((zimage_hdr_t *)(&header))->start;
-        if (0 == load_addr) {
-            load_addr = vm->entry;
-        }
-        break;
-    default:
-        ZF_LOGE("Error: Unknown kernel image format for '%s'", kernel_image_name);
+        ZF_LOGE("Kernel image loading failed (%d)", err);
         return -1;
     }
 
-    size_t len = 0;
-    err = load_image(vm, kernel_name, load_addr, &len);
-    if (err) {
-        return -1;
-    }
-
-    guest_kernel_image->kernel_image.load_paddr = load_addr;
-    guest_kernel_image->kernel_image.size = len;
     return 0;
 }
 
-int vm_load_guest_module(vm_t *vm, const char *module_name, uintptr_t load_address, size_t alignment,
+int vm_load_guest_module(vm_t *vm, const char *module_name,
+                         uintptr_t load_address, size_t alignment,
                          guest_image_t *guest_image)
 {
-    int err;
-
     if (!guest_image) {
         ZF_LOGE("Invalid guest_image_t object");
         return -1;
     }
 
-    /* Determine the load address */
-    uintptr_t load_addr;
-    generic_hdr_t header = {0};
-    enum img_type ret_file_type;
-    err = get_guest_image_type(module_name, &ret_file_type, &header);
+    int err = vm_load_image(vm, module_name, false, load_address, guest_image);
     if (err) {
-        return 0;
-    }
-    switch (ret_file_type) {
-    case IMG_DTB:
-    case IMG_INITRD_GZ:
-        load_addr = load_address;
-        break;
-    default:
-        ZF_LOGE("Error: Unknown module image format for '%s'", image_name);
-        return 0;
+        ZF_LOGE("Module image loading failed (%d)", err);
+        return -1;
     }
 
-    size_t len = 0;
-    err = load_image(vm, module_name, load_addr, &len);
-    if (err) {
-        return 0;
-    }
-
-    guest_image->load_paddr = load_addr;
-    guest_image->size = len;
     return 0;
 }
