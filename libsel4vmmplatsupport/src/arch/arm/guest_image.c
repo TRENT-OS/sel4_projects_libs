@@ -115,13 +115,14 @@ static int get_guest_image_type(const char *image_name, enum img_type *image_typ
     }
 
     size_t len = read(fd, header, sizeof(*header));
+    close(fd);
+
     if (len != sizeof(*header)) {
         ZF_LOGE("Could not read len. File is likely corrupt");
-        close(fd);
         return -1;
     }
+
     *image_type = image_get_type(header);
-    close(fd);
     return 0;
 }
 
