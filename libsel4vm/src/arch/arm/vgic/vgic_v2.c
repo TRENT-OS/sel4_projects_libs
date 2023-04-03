@@ -227,12 +227,15 @@ int vm_install_vgic(vm_t *vm)
     if (vgic->dist == NULL) {
         return -1;
     }
+
+    ZF_LOGE("Install GIC dist at %p", (void *)GIC_DIST_PADDR);
     vm_memory_reservation_t *vgic_dist_res = vm_reserve_memory_at(vm, GIC_DIST_PADDR, PAGE_SIZE_4K,
                                                                   handle_vgic_dist_fault, (void *)vgic_dist);
     vgic_dist->vgic = vgic;
     vgic_dist_reset(vgic_dist);
 
     /* Remap VCPU to CPU */
+    ZF_LOGE("Install GIC CPU interface at %p", (void *)GIC_CPU_PADDR);
     vm_memory_reservation_t *vgic_vcpu_reservation = vm_reserve_memory_at(vm, GIC_CPU_PADDR, PAGE_SIZE_4K,
                                                                           handle_vgic_vcpu_fault, NULL);
     int err = vm_map_reservation(vm, vgic_vcpu_reservation, vgic_vcpu_iterator, (void *)vm);

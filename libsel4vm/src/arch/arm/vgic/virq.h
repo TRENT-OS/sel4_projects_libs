@@ -173,6 +173,7 @@ static inline int vgic_irq_enqueue(vgic_t *vgic, vm_vcpu_t *vcpu, struct virq_ha
         struct virq_handle *lst_virq = q->irqs[i];
         assert(lst_virq);
         if (lst_virq == irq) {
+            ZF_LOGI("interrupt %d already enqueued", irq->virq);
             return 0;
         }
         assert(lst_virq->virq != irq->virq);
@@ -218,8 +219,16 @@ static inline int vgic_vcpu_load_list_reg(vgic_t *vgic, vm_vcpu_t *vcpu, int idx
     assert(vgic_vcpu);
     assert((idx >= 0) && (idx < ARRAY_SIZE(vgic_vcpu->lr_shadow)));
 
-    assert((seL4_Uint8)group == group);
-    assert((seL4_Uint8)idx == idx);
+    if (group != (seL4_Uint8)group) {
+        ZF_LOGE("group 0x%x exceeds uint8", group);
+        return -1;
+    }
+
+    if (idx != (seL4_Uint8)idx) {
+        ZF_LOGE("idx 0x%x exceeds uint8", idx);
+        return -1;
+    }
+
     seL4_Error err = seL4_ARM_VCPU_InjectIRQ(vcpu->vcpu.cptr, irq->virq, 0,
                                              (seL4_Uint8)group,
                                              (seL4_Uint8)idx);
