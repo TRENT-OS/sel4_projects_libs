@@ -114,16 +114,6 @@ static int vm_user_exception_handler(vm_vcpu_t *vcpu)
     return VM_EXIT_HANDLED;
 }
 
-static void print_unhandled_vcpu_hsr(vm_vcpu_t *vcpu, uint32_t hsr)
-{
-    printf("======= Unhandled VCPU fault from [%s] =======\n", vcpu->vm->vm_name);
-    printf("HSR Value: 0x%08x\n", hsr);
-    printf("HSR Exception Class: %s [0x%x]\n", hsr_reasons[HSR_EXCEPTION_CLASS(hsr)], HSR_EXCEPTION_CLASS(hsr));
-    printf("Instruction Length: %d\n", HSR_IL(hsr));
-    printf("ISS Value: 0x%x\n", hsr & HSR_ISS_MASK);
-    printf("==============================================\n");
-}
-
 static int vm_vcpu_handler(vm_vcpu_t *vcpu)
 {
     uint32_t hsr;
@@ -143,7 +133,14 @@ static int vm_vcpu_handler(vm_vcpu_t *vcpu)
             return VM_EXIT_HANDLED;
         }
     }
-    print_unhandled_vcpu_hsr(vcpu, hsr);
+
+    printf("======= Unhandled VCPU fault from [%s] =======\n", vcpu->vm->vm_name);
+    printf("HSR Value: 0x%08x\n", hsr);
+    printf("HSR Exception Class: %s [0x%x]\n", hsr_reasons[HSR_EXCEPTION_CLASS(hsr)], HSR_EXCEPTION_CLASS(hsr));
+    printf("Instruction Length: %d\n", HSR_IL(hsr));
+    printf("ISS Value: 0x%x\n", hsr & HSR_ISS_MASK);
+    printf("==============================================\n");
+
     return VM_EXIT_HANDLE_ERROR;
 }
 
