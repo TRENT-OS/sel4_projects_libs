@@ -94,8 +94,15 @@ int fdt_generate_plat_vcpu_node(vm_t *vm, void *fdt)
         ZF_LOGE("Failed to create cpu node");
         return cpu_node;
     }
+
     FDT_OP(fdt_appendprop_u32(fdt, cpu_node, "#address-cells", 0x1));
     FDT_OP(fdt_appendprop_u32(fdt, cpu_node, "#size-cells", 0x0));
+
+    if (0 == vm->num_vcpus) {
+        ZF_LOGW("No VCPUs defined, empty CPU node created");
+        return 0;
+    }
+
     for (int i = 0; i < vm->num_vcpus; i++) {
         vm_vcpu_t *vcpu = vm->vcpus[i];
         if (!vcpu) {
