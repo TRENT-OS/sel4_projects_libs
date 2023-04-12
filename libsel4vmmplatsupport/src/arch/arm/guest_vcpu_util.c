@@ -98,6 +98,10 @@ int fdt_generate_plat_vcpu_node(vm_t *vm, void *fdt)
     FDT_OP(fdt_appendprop_u32(fdt, cpu_node, "#size-cells", 0x0));
     for (int i = 0; i < vm->num_vcpus; i++) {
         vm_vcpu_t *vcpu = vm->vcpus[i];
+        if (!vcpu) {
+            ZF_LOGW("can't create DTB node for missing vcpu #%d", i);
+            continue;
+        }
         char cpu_name[MAX_CPU_NAME_LENGTH];
         snprintf(cpu_name, MAX_CPU_NAME_LENGTH, "cpu@%x", vcpu->vcpu_id);
         int sub_cpu_node = fdt_add_subnode(fdt, cpu_node, cpu_name);
