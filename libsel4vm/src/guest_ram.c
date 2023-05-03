@@ -154,7 +154,7 @@ int vm_ram_touch(vm_t *vm, uintptr_t addr, size_t size, ram_touch_callback_fn to
     uintptr_t next_addr;
     uintptr_t end_addr = (uintptr_t)(addr + size);
     if (!is_ram_region(vm, addr, size)) {
-        ZF_LOGE("Failed to touch ram region: Not registered RAM region");
+        ZF_LOGE("Failed to touch ram region: Not registered RAM region at %" PRIxPTR, current_addr);
         return -1;
     }
     access_cookie.touch_fn = touch_callback;
