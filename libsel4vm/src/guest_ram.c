@@ -299,101 +299,82 @@ static vm_frame_t ram_ut_alloc_iterator(uintptr_t addr, void *cookie)
     return frame_result;
 }
 
-static int map_ram_reservation(vm_t *vm, vm_memory_reservation_t *ram_reservation, bool untyped)
+static int vm_ram_register_helper(vm_t *vm, vm_memory_reservation_t *res,
+                                  uintptr_t start, size_t bytes,
+                                  memory_map_iterator_fn map_iterator,
+                                  void *cookie)
 {
     int err;
-    /* We map the reservation immediately, by-passing the deferred mapping functionality
-     * This allows us the allocate, touch and manipulate VM RAM prior to the region needing to be
-     * faulted upon first */
-    if (untyped) {
-        err = map_vm_memory_reservation(vm, ram_reservation, ram_ut_alloc_iterator, (void *)vm);
-    } else {
-        err = map_vm_memory_reservation(vm, ram_reservation, ram_alloc_iterator, (void *)vm);
-    }
+
+    err = map_vm_memory_reservation(vm, res, map_iterator, cookie);
     if (err) {
         ZF_LOGE("Failed to map new ram reservation");
+        vm_free_reserved_memory(vm, res);
         return -1;
     }
+
+    err = expand_guest_ram_region(vm, start, bytes);
+    if (err) {
+        ZF_LOGE("Failed to register new ram region");
+        vm_free_reserved_memory(vm, res);
+        return -1;
+    }
+
     return 0;
 }
 
 uintptr_t vm_ram_register(vm_t *vm, size_t bytes)
 {
-    vm_memory_reservation_t *ram_reservation;
-    int err;
-    uintptr_t base_addr;
+    uintptr_t base_addr = 0;
+    vm_memory_reservation_t *res = vm_reserve_anon_memory(vm, bytes, BIT(seL4_PageBits),
+                                                          default_ram_fault_callback,
+                                                          NULL, &base_addr);
+    if (!res) {
+        ZF_LOGE("Unable to reserve RAM region of size 0x%zx", bytes);
+        return 0;
+    }
 
-    ram_reservation = vm_reserve_anon_memory(vm, bytes, BIT(seL4_PageBits),
-                                             default_ram_fault_callback, NULL,
-                                             &base_addr);
-    if (!ram_reservation) {
-        ZF_LOGE("Unable to reserve ram region of size 0x%zx", bytes);
-        return 0;
-    }
-    err = map_ram_reservation(vm, ram_reservation, false);
+    /* We map the reservation immediately, by-passing the deferred mapping
+     * functionality. This allows us the allocate, touch and manipulate VM RAM
+     * prior to the region needing to be faulted upon first.
+     * This calls vm_free_reserved_memory() in error
+     */
+    int err = vm_ram_register_helper(vm, res, base_addr, bytes,
+                                     ram_alloc_iterator, vm);
     if (err) {
-        vm_free_reserved_memory(vm, ram_reservation);
-        return 0;
-    }
-    err = expand_guest_ram_region(vm, base_addr, bytes);
-    if (err) {
-        ZF_LOGE("Failed to register new ram region");
-        vm_free_reserved_memory(vm, ram_reservation);
+        ZF_LOGE("Failed to register RAM");
         return 0;
     }
 
     return base_addr;
 }
 
-int vm_ram_register_at(vm_t *vm, uintptr_t start, size_t bytes, bool untyped)
-{
-    vm_memory_reservation_t *ram_reservation;
-    int err;
-
-    ram_reservation = vm_reserve_memory_at(vm, start, bytes, default_ram_fault_callback,
-                                           NULL);
-    if (!ram_reservation) {
-        ZF_LOGE("Unable to reserve ram region at addr 0x%"PRIxPTR" of size 0x%zx", start, bytes);
-        return -1;
-    }
-    err = map_ram_reservation(vm, ram_reservation, untyped);
-    if (err) {
-        vm_free_reserved_memory(vm, ram_reservation);
-        return -1;
-    }
-    err = expand_guest_ram_region(vm, start, bytes);
-    if (err) {
-        ZF_LOGE("Failed to register new ram region");
-        vm_free_reserved_memory(vm, ram_reservation);
-        return -1;
-    }
-    return 0;
-}
-
-int vm_ram_register_at_custom_iterator(vm_t *vm, uintptr_t start, size_t bytes, memory_map_iterator_fn map_iterator,
+int vm_ram_register_at_custom_iterator(vm_t *vm, uintptr_t start, size_t bytes,
+                                       memory_map_iterator_fn map_iterator,
                                        void *cookie)
 {
-    vm_memory_reservation_t *ram_reservation;
-    int err;
+    vm_memory_reservation_t *res = vm_reserve_memory_at(vm, start, bytes,
+                                                        default_ram_fault_callback,
+                                                        NULL);
+    if (!res) {
+        ZF_LOGE("Unable to reserve RAM at addr 0x%"PRIxPTR" of size 0x%zx",
+                start, bytes);
+        return -1;
+    }
 
-    ram_reservation = vm_reserve_memory_at(vm, start, bytes, default_ram_fault_callback,
-                                           NULL);
-    if (!ram_reservation) {
-        ZF_LOGE("Unable to reserve ram region at addr 0x%"PRIxPTR" of size 0x%zx", start, bytes);
-        return -1;
-    }
-    err = map_vm_memory_reservation(vm, ram_reservation, map_iterator, cookie);
-    if (err) {
-        ZF_LOGE("failed to map vm memory reservation to dataport\n");
-        return -1;
-    }
-    err = expand_guest_ram_region(vm, start, bytes);
-    if (err) {
-        ZF_LOGE("Failed to register new ram region");
-        vm_free_reserved_memory(vm, ram_reservation);
-        return -1;
-    }
-    return 0;
+    /* We map the reservation immediately, by-passing the deferred mapping
+     * functionality. This allows us the allocate, touch and manipulate VM RAM
+     * prior to the region needing to be faulted upon first.
+     * This calls vm_free_reserved_memory() in error
+     */
+    return vm_ram_register_helper(vm, res, start, bytes, map_iterator, cookie);
+}
+
+int vm_ram_register_at(vm_t *vm, uintptr_t start, size_t bytes, bool untyped)
+{
+    memory_map_iterator_fn iterator = untyped ? ram_ut_alloc_iterator
+                                      : ram_alloc_iterator;
+    return vm_ram_register_at_custom_iterator(vm, start, bytes, iterator, vm);
 }
 
 void vm_ram_free(vm_t *vm, uintptr_t start, size_t bytes)

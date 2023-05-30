@@ -114,16 +114,6 @@ static int vm_user_exception_handler(vm_vcpu_t *vcpu)
     return VM_EXIT_HANDLED;
 }
 
-static void print_unhandled_vcpu_hsr(vm_vcpu_t *vcpu, uint32_t hsr)
-{
-    printf("======= Unhandled VCPU fault from [%s] =======\n", vcpu->vm->vm_name);
-    printf("HSR Value: 0x%08x\n", hsr);
-    printf("HSR Exception Class: %s [0x%x]\n", hsr_reasons[HSR_EXCEPTION_CLASS(hsr)], HSR_EXCEPTION_CLASS(hsr));
-    printf("Instruction Length: %d\n", HSR_IL(hsr));
-    printf("ISS Value: 0x%x\n", hsr & HSR_ISS_MASK);
-    printf("==============================================\n");
-}
-
 static int vm_vcpu_handler(vm_vcpu_t *vcpu)
 {
     uint32_t hsr;
@@ -143,7 +133,14 @@ static int vm_vcpu_handler(vm_vcpu_t *vcpu)
             return VM_EXIT_HANDLED;
         }
     }
-    print_unhandled_vcpu_hsr(vcpu, hsr);
+
+    printf("======= Unhandled VCPU fault from [%s] =======\n", vcpu->vm->vm_name);
+    printf("HSR Value: 0x%08x\n", hsr);
+    printf("HSR Exception Class: %s [0x%x]\n", hsr_reasons[HSR_EXCEPTION_CLASS(hsr)], HSR_EXCEPTION_CLASS(hsr));
+    printf("Instruction Length: %d\n", HSR_IL(hsr));
+    printf("ISS Value: 0x%x\n", hsr & HSR_ISS_MASK);
+    printf("==============================================\n");
+
     return VM_EXIT_HANDLE_ERROR;
 }
 
@@ -212,45 +209,50 @@ int vm_register_unhandled_vcpu_fault_callback(vm_vcpu_t *vcpu, unhandled_vcpu_fa
 
 int vm_run_arch(vm_t *vm)
 {
-    int err;
-    int ret;
-
-    ret = 1;
     /* Loop, handling events */
-    while (ret > 0) {
-        seL4_MessageInfo_t tag;
-        seL4_Word sender_badge;
-        seL4_Word label;
-        int vm_exit_reason;
+    for(;;) {
 
-        tag = seL4_Recv(vm->host_endpoint, &sender_badge);
-        label = seL4_MessageInfo_get_label(tag);
+        seL4_Word sender_badge;
+        seL4_MessageInfo_t tag = seL4_Recv(vm->host_endpoint, &sender_badge);
+        seL4_Word label = seL4_MessageInfo_get_label(tag);
+
+        // Invoken handlers for known badges
         if (sender_badge >= MIN_VCPU_BADGE && sender_badge <= MAX_VCPU_BADGE) {
             seL4_Word vcpu_idx = VCPU_BADGE_IDX(sender_badge);
             if (vcpu_idx >= vm->num_vcpus) {
-                ZF_LOGE("Invalid VCPU index. Exiting");
-                ret = -1;
-            } else {
-                vm_exit_reason = vm_decode_exit(label);
-                ret = arm_exit_handlers[vm_exit_reason](vm->vcpus[vcpu_idx]);
-                if (ret == VM_EXIT_HANDLE_ERROR) {
+                ZF_LOGE("Invalid VCPU index %s. Exiting", vcpu_idx);
+                return -1;
+            }
+            int vm_exit_reason = vm_decode_exit(label);
+            vm_exit_handler_fn_t handler_fn = arm_exit_handlers[vm_exit_reason];
+            int ret = handler_fn(vm->vcpus[vcpu_idx]);
+            switch (ret) {
+                case VM_EXIT_UNHANDLED:
+                case VM_EXIT_HANDLED:
+                    break;
+                case VM_EXIT_HANDLE_ERROR:
                     vm->run.exit_reason = VM_GUEST_ERROR_EXIT;
-                }
+                    ZF_LOGE("VM_EXIT_HANDLE_ERROR, vm_exit_reason %d. Exiting", vm_exit_reason);
+                    return -1;
+                default:
+                    ZF_LOGE("ret = 0x%x, vm_exit_reason %d. Exiting", vm_exit_reason);
+                    return -1;
             }
         } else {
-            if (vm->run.notification_callback) {
-                err = vm->run.notification_callback(vm, sender_badge, tag,
-                                                    vm->run.notification_callback_cookie);
-            } else {
+            // Invoke callback for unknown badges
+            if (!vm->run.notification_callback) {
                 ZF_LOGE("Unable to handle VM notification. Exiting");
-                err = -1;
+                return -1;
             }
+            int err = vm->run.notification_callback(vm, sender_badge, tag,
+                                                vm->run.notification_callback_cookie);
             if (err) {
-                ret = -1;
                 vm->run.exit_reason = VM_GUEST_ERROR_EXIT;
+                ZF_LOGE("Callback returned %d. Exiting", err);
+                return -1;
             }
         }
     }
 
-    return ret;
+    UNREACHABLE();
 }
