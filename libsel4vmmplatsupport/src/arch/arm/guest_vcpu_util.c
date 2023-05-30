@@ -91,18 +91,30 @@ int fdt_generate_plat_vcpu_node(vm_t *vm, void *fdt)
     int root_offset = fdt_path_offset(fdt, "/");
     int cpu_node = fdt_add_subnode(fdt, root_offset, "cpus");
     if (cpu_node < 0) {
-        ZF_LOGE("Failed to create cpu node");
+        ZF_LOGE("Failed to create node /cpus (%d)", cpu_node);
         return cpu_node;
     }
+
     FDT_OP(fdt_appendprop_u32(fdt, cpu_node, "#address-cells", 0x1));
     FDT_OP(fdt_appendprop_u32(fdt, cpu_node, "#size-cells", 0x0));
+
+    if (0 == vm->num_vcpus) {
+        ZF_LOGW("No VCPUs defined, empty node node /cpus");
+        return 0;
+    }
+
     for (int i = 0; i < vm->num_vcpus; i++) {
         vm_vcpu_t *vcpu = vm->vcpus[i];
+        if (!vcpu) {
+            ZF_LOGW("can't create DTB node for missing vcpu #%d", i);
+            continue;
+        }
         char cpu_name[MAX_CPU_NAME_LENGTH];
         snprintf(cpu_name, MAX_CPU_NAME_LENGTH, "cpu@%x", vcpu->vcpu_id);
         int sub_cpu_node = fdt_add_subnode(fdt, cpu_node, cpu_name);
         if (sub_cpu_node < 0) {
-            ZF_LOGE("Failed to create cpu@%x node", vcpu->vcpu_id);
+            ZF_LOGE("Failed to create node /cpus/%s' (%d)",
+                    cpu_name, sub_cpu_node);
             return sub_cpu_node;
         }
         FDT_OP(fdt_appendprop_string(fdt, sub_cpu_node, "device_type", "cpu"));
@@ -112,9 +124,14 @@ int fdt_generate_plat_vcpu_node(vm_t *vm, void *fdt)
             FDT_OP(fdt_appendprop_string(fdt, sub_cpu_node, "enable-method", "psci"));
         }
     }
-    int ret = 0;
+
     if (vm->num_vcpus > 1) {
-        ret = generate_psci_node(fdt, root_offset);
+        int err = generate_psci_node(fdt, root_offset);
+        if (err) {
+            ZF_LOGE("Failed to create PSCI node (%d)", err);
+            return err;
+        }
     }
-    return ret;
+
+    return 0;
 }
