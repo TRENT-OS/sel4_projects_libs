@@ -103,7 +103,7 @@ static void vgic_dist_reset(struct vgic_dist_device *d)
     struct gic_dist_map *gic_dist;
     gic_dist = vgic_priv_get_dist(d);
     memset(gic_dist, 0, sizeof(*gic_dist));
-    gic_dist->ic_type         = 0x0000fce7; /* RO */
+    gic_dist->ic_type         = 0x0000f8e7; /* RO */
     gic_dist->dist_ident      = 0x0200043b; /* RO */
 
     for (int i = 0; i < CONFIG_MAX_NUM_NODES; i++) {
